@@ -302,6 +302,27 @@ def _omits_temperature(model: str) -> bool:
     return m.startswith(("o1", "o3", "o4")) or m.startswith("gpt-5")
 
 
+# A native reasoning model (o-series, gpt-5.x) does its own chain-of-thought, which
+# we surface live (see _reasoning_text). For those we DON'T also force the verbose
+# <thinking> text block — that just gates the visible answer behind a long emitted
+# block and duplicates the native reasoning.
+def _is_reasoning_model(model: str) -> bool:
+    return _omits_temperature(model)
+
+
+def _reasoning_text(delta) -> str:
+    """Pull a reasoning-token chunk out of a streamed delta. OpenRouter exposes a
+    reasoning model's chain-of-thought as `delta.reasoning` (some providers use
+    `reasoning_content`); the OpenAI SDK stashes such non-standard fields on the
+    object directly or under `model_extra`. Returns "" when there's none."""
+    v = getattr(delta, "reasoning", None) or getattr(delta, "reasoning_content", None)
+    if not v:
+        extra = getattr(delta, "model_extra", None) or {}
+        if isinstance(extra, dict):
+            v = extra.get("reasoning") or extra.get("reasoning_content")
+    return v if isinstance(v, str) else ""
+
+
 def _chat_kwargs(model: str | None = None) -> dict:
     """Shared chat-completion kwargs; temperature omitted when unset or when the
     target model rejects it (reasoning / gpt-5.x models)."""
@@ -605,6 +626,16 @@ def _answer_stream_openai(question: str, contexts: list[dict], image_paths: list
                           searcher=None, pager=None, spec: dict | None = None):
     import time
     client = _chat_client(spec)
+    # OpenRouter is the active route unless this is the direct-to-OpenAI override or
+    # a local server. Only over OpenRouter do we get (and ask for) reasoning deltas.
+    via_openrouter = config.USE_OPENROUTER and not (
+        spec and (spec.get("direct") or spec.get("provider") == "local"))
+    reasoning_model = _is_reasoning_model(model)
+    # Native reasoning models stream their own chain-of-thought; surfacing that live
+    # is the "thinking", so don't also force the verbose <thinking> text block (it
+    # would gate the visible answer behind a long emitted block).
+    if reasoning_model:
+        think = False
     messages = _build_messages(question, contexts, image_paths, history, think)
     tools = [CALC_TOOL] + ([SEARCH_TOOL] if searcher else []) + ([GET_PAGES_TOOL] if pager else [])
     t0 = time.time()
@@ -621,6 +652,10 @@ def _answer_stream_openai(question: str, contexts: list[dict], image_paths: list
         nonlocal tools_ok
         kw = dict(messages=messages, stream=True,
                   stream_options={"include_usage": True}, **_chat_kwargs(model))
+        if reasoning_model and via_openrouter:
+            # Ask OpenRouter to generate AND include reasoning tokens so we can stream
+            # them as live "thinking" instead of sitting through a silent gap.
+            kw["extra_body"] = {"reasoning": {"enabled": True}}
         if tools_ok and tools:
             kw["tools"] = tools
             if tool_choice:
@@ -636,6 +671,8 @@ def _answer_stream_openai(question: str, contexts: list[dict], image_paths: list
                 return client.chat.completions.create(**kw)
             raise
 
+    think_open = False   # currently streaming reasoning inside an injected <thinking> block
+
     for _ in range(_MAX_TOOL_ROUNDS):
         stream = _open_stream()
         round_content: list = []
@@ -645,8 +682,20 @@ def _answer_stream_openai(question: str, contexts: list[dict], image_paths: list
             if not chunk.choices:
                 continue
             d = chunk.choices[0].delta
+            # Reasoning tokens stream first: wrap them in <thinking>…</thinking> so the
+            # UI shows a live, expandable "Thinking" box. They're NOT part of the answer,
+            # so they go to the delta stream only — never into content_all.
+            r = _reasoning_text(d)
+            if r:
+                if not think_open:
+                    think_open = True
+                    yield {"type": "delta", "text": "<thinking>"}
+                yield {"type": "delta", "text": r}
             c = getattr(d, "content", None)
             if c:
+                if think_open:   # reasoning done — close the block before the answer starts
+                    think_open = False
+                    yield {"type": "delta", "text": "</thinking>"}
                 round_content.append(c)
                 content_all.append(c)
                 yield {"type": "delta", "text": c}
@@ -659,6 +708,10 @@ def _answer_stream_openai(question: str, contexts: list[dict], image_paths: list
                     slot["name"] = fn.name
                 if fn and getattr(fn, "arguments", None):
                     slot["args"] += fn.arguments
+
+        if think_open:   # round ended mid-reasoning (e.g. reasoned, then called a tool)
+            think_open = False
+            yield {"type": "delta", "text": "</thinking>"}
 
         if not tool_calls:
             pending = False
@@ -710,10 +763,23 @@ def _answer_stream_openai(question: str, contexts: list[dict], image_paths: list
             _add_usage(usage_tot, getattr(chunk, "usage", None))
             if not chunk.choices:
                 continue
-            c = getattr(chunk.choices[0].delta, "content", None)
+            d = chunk.choices[0].delta
+            r = _reasoning_text(d)
+            if r:
+                if not think_open:
+                    think_open = True
+                    yield {"type": "delta", "text": "<thinking>"}
+                yield {"type": "delta", "text": r}
+            c = getattr(d, "content", None)
             if c:
+                if think_open:
+                    think_open = False
+                    yield {"type": "delta", "text": "</thinking>"}
                 content_all.append(c)
                 yield {"type": "delta", "text": c}
+        if think_open:
+            think_open = False
+            yield {"type": "delta", "text": "</thinking>"}
 
     yield {"type": "final", "text": "".join(content_all), "latency": time.time() - t0,
            "n_images": len(image_paths), "usage": usage_tot, "calculations": calculations}

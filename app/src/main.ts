@@ -220,6 +220,8 @@ function createWindow(): void {
     title: "pdf_qa",
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 13, y: 13 },
+    vibrancy: process.platform === "darwin" ? "under-window" : undefined,
+    visualEffectState: "active",
     backgroundColor: "#fbfbfa",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),

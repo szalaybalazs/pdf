@@ -10,10 +10,10 @@ function Messages() {
 
   if (!t || t.messages.length === 0) {
     return (
-      <section className="flex-1 overflow-y-auto px-0 pb-[150px] pt-10">
-        <div className="mx-auto mt-[20vh] flex flex-col items-center px-6">
-          <div className="text-[26px] font-semibold tracking-tight text-ink">What can I help with?</div>
-          <div className="mt-3 max-w-[440px] text-center text-[14px] leading-relaxed text-faint">
+      <section className="flex-1 overflow-y-auto px-0 pb-[150px] pt-8">
+        <div className="mx-auto mt-[18vh] flex flex-col items-center px-6">
+          <div className="text-[28px] font-semibold text-ink">What can I help with?</div>
+          <div className="mt-3 max-w-[460px] text-center text-[14px] leading-relaxed text-faint">
             Ask a question about your indexed PDFs. Figures in answers are underlined — click to open the page.
           </div>
         </div>
@@ -22,11 +22,11 @@ function Messages() {
   }
 
   return (
-    <section className="flex-1 overflow-y-auto px-0 pb-[150px] pt-10">
+    <section className="flex-1 overflow-y-auto px-0 pb-[150px] pt-8">
       {t.messages.map((m, i) =>
         m.kind === "user" ? (
-          <div className="mx-auto mb-7 flex max-w-[760px] flex-col items-end px-7" key={i}>
-            <div className="max-w-[82%] whitespace-pre-wrap rounded-[18px] border border-border bg-surface-2 px-4 py-2.5 text-[15px] leading-relaxed text-ink">{m.text}</div>
+          <div className="mx-auto mb-6 flex max-w-[780px] flex-col items-end px-8" key={i}>
+            <div className="max-w-[82%] whitespace-pre-wrap rounded-[20px] bg-surface-2 px-4 py-2.5 text-[15px] leading-relaxed text-ink shadow-[0_1px_1px_rgba(20,20,18,0.03)]">{m.text}</div>
           </div>
         ) : (
           <Assistant m={m} key={m.reqId || i} />
@@ -60,17 +60,17 @@ function Composer() {
   };
 
   return (
-    <footer className="absolute bottom-0 left-0 right-0 flex flex-col items-center bg-[linear-gradient(0deg,var(--color-bg)_42%,transparent)] px-7 pb-4">
-      <div className="flex w-full max-w-[760px] items-end gap-2.5 rounded-[22px] border border-border-strong bg-bg py-2 pl-[18px] pr-2 shadow-[0_1px_2px_rgba(20,20,18,0.04)] transition focus-within:border-tint focus-within:shadow-[0_8px_30px_rgba(20,20,18,0.10)] focus-within:ring-[3px] focus-within:ring-tint/15">
+    <footer className="absolute bottom-0 left-0 right-0 flex flex-col items-center bg-[linear-gradient(0deg,var(--color-bg)_52%,transparent)] px-7 pb-4">
+      <div className="composer-shell flex w-full max-w-[780px] items-end gap-2.5 rounded-[24px] border border-border bg-bg py-2 pl-[18px] pr-2 transition focus-within:border-border-strong focus-within:shadow-[0_12px_36px_rgba(20,20,18,0.12)]">
         <textarea
-          ref={ref} rows={1} placeholder="Message pdf_qa…"
+          ref={ref} rows={1} placeholder="Message pdf_qa"
           className="max-h-[180px] flex-1 resize-none border-none bg-transparent py-2.5 text-[15px] leading-normal text-ink outline-none placeholder:text-faint"
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); } }}
         />
         <button
-          className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full bg-ink text-white transition hover:opacity-85 active:scale-95 disabled:cursor-not-allowed disabled:opacity-25"
+          className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full bg-ink text-white transition hover:opacity-85 active:scale-95 disabled:cursor-not-allowed disabled:bg-surface-3 disabled:text-faint"
           onClick={submit} disabled={busy || !value.trim()} title="Send"
         >
           {busy ? (
@@ -84,9 +84,9 @@ function Composer() {
       </div>
 
       {/* controls under the input: model · debug · session tokens */}
-      <div className="mt-2 flex w-full max-w-[760px] flex-wrap items-center gap-3">
+      <div className="mt-2 flex w-full max-w-[780px] flex-wrap items-center gap-3">
         <select
-          className="cursor-pointer rounded-md border border-border-strong bg-surface px-2.5 py-1 font-mono text-[12px] text-ink outline-none transition hover:border-muted focus:border-tint"
+          className="cursor-pointer rounded-md border border-transparent bg-surface px-2.5 py-1 font-mono text-[12px] text-muted outline-none transition hover:bg-surface-2 hover:text-ink focus:border-border-strong"
           title="Answer model" value={store.selectedModel} onChange={(e) => setModel(e.target.value)}
         >
           {store.models.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
@@ -100,15 +100,13 @@ function Composer() {
           </span>
         )}
       </div>
-
-      <div className="mt-2 text-center text-[12px] text-faint">pdf_qa can make mistakes. Consider verifying important information.</div>
     </footer>
   );
 }
 
 export function Chat() {
   return (
-    <main className="relative flex min-w-0 flex-1 flex-col">
+    <main className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       <Messages />
       <Composer />
     </main>

@@ -95,6 +95,12 @@ export function renderMarkdown(src: string, allowMermaid = false): string {
       closeList();
       const lvl = m[1].length;
       out.push(`<h${lvl}>${inlineFormat(m[2])}</h${lvl}>`);
+    } else if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      // horizontal rule (--- / *** / ___). Checked before the list branch so a
+      // bare "---" isn't mistaken for a bullet; the table branch above only fires
+      // on a delimiter that follows a header row with pipes, so it won't catch this.
+      closeList();
+      out.push("<hr>");
     } else if ((m = line.match(/^\s*[-*+]\s+(.*)$/))) {
       if (listType !== "ul") { closeList(); out.push("<ul>"); listType = "ul"; }
       out.push(`<li>${inlineFormat(m[1])}</li>`);

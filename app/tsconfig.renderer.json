@@ -3,10 +3,10 @@
   "compilerOptions": {
     "module": "ES2020",
     "moduleResolution": "Bundler",
-    "outDir": "dist",
-    "rootDir": "renderer",
     "lib": ["ES2020", "DOM", "DOM.Iterable"],
-    "types": []
+    "jsx": "react-jsx",
+    "types": ["react", "react-dom", "node"],
+    "noEmit": true
   },
-  "include": ["renderer/**/*.ts"]
+  "include": ["renderer/src/**/*.ts", "renderer/src/**/*.tsx", "src/trpc.ts"]
 }

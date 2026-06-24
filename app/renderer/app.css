@@ -1,0 +1,168 @@
+/* =============================================================================
+   Tailwind v4 entry. Design tokens live in @theme (exposed as utilities AND as
+   CSS variables). Component "chrome" is styled with utility classes in the React
+   components; the markdown-answer prose and other dynamically-rendered HTML
+   (injected via dangerouslySetInnerHTML) are styled here with semantic classes,
+   since utilities can't reach that markup.
+   ============================================================================= */
+@import "tailwindcss";
+
+/* scan the renderer source for class names */
+@source "./src";
+
+@theme {
+  --color-bg: #ffffff;
+  --color-surface: #fbfbfa;
+  --color-surface-2: #f4f4f2;
+  --color-surface-3: #ececea;
+  --color-border: #ececea;
+  --color-border-strong: #dededb;
+  --color-ink: #1a1a18;        /* primary text + near-black accent */
+  --color-muted: #6b6b66;
+  --color-faint: #9b9b95;
+  --color-tint: #2f6f5e;       /* quiet teal: links / active marks */
+  --color-tint-soft: #eef4f2;
+  --color-tint-strong: #245446;
+  --color-danger: #c0392b;
+  --color-amber: #b9821a;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Inter,
+    "Helvetica Neue", Arial, "Apple Color Emoji", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas,
+    "Liberation Mono", monospace;
+}
+
+@layer base {
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--color-bg); color: var(--color-ink);
+    font-family: var(--font-sans); font-size: 14px;
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #dcdcd9; border-radius: 6px; border: 3px solid transparent; background-clip: padding-box; }
+  ::-webkit-scrollbar-thumb:hover { background: #c6c6c2; background-clip: padding-box; }
+}
+
+.app-drag { -webkit-app-region: drag; }
+.app-no-drag { -webkit-app-region: no-drag; }
+
+/* --- animations shared by streaming cursor / pending bullet / spinner ------- */
+@keyframes blink { to { opacity: .2; } }
+.cursor { color: var(--color-ink); animation: blink 1s steps(2, start) infinite; }
+.trace-pending .bullet { color: var(--color-ink); animation: blink 1s steps(2, start) infinite; }
+
+/* --- tool-call trace ------------------------------------------------------- */
+.trace {
+  font-family: var(--font-mono); font-size: 12.5px; background: var(--color-surface);
+  border: 1px solid var(--color-border); border-radius: 10px; padding: 12px 14px; margin-bottom: 16px;
+}
+.trace-row { padding: 2px 0; color: var(--color-ink); }
+.trace-row .bullet { color: var(--color-tint); }
+.trace-row .name { font-weight: 600; }
+.trace-row .args, .trace-row .dur { color: var(--color-muted); }
+.trace-detail { color: var(--color-muted); padding-left: 18px; }
+.trace-detail.debug { color: var(--color-faint); }
+
+/* --- thinking panel -------------------------------------------------------- */
+.thinking { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 10px; padding: 4px 14px; margin-bottom: 16px; }
+.thinking summary {
+  cursor: pointer; font-size: 13px; color: var(--color-muted); font-weight: 500;
+  padding: 8px 0; user-select: none; list-style: none; display: flex; align-items: center; gap: 8px;
+}
+.thinking summary::-webkit-details-marker { display: none; }
+.thinking summary::before {
+  content: "";
+  width: 6px; height: 6px;
+  border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform .12s ease;
+}
+.thinking[open] summary::before { transform: rotate(45deg); }
+.think-body {
+  font-size: 13.5px; line-height: 1.6; color: var(--color-muted);
+  white-space: pre-wrap; padding: 10px 0; border-top: 1px solid var(--color-border);
+}
+
+/* --- answer (markdown, injected as HTML) ----------------------------------- */
+.answer { line-height: 1.65; font-size: 15.5px; color: var(--color-ink); }
+.answer p { margin: 0 0 15px; }
+.answer h1, .answer h2, .answer h3, .answer h4 { margin: 24px 0 12px; line-height: 1.3; font-weight: 650; letter-spacing: -0.01em; }
+.answer h1 { font-size: 1.45em; } .answer h2 { font-size: 1.25em; } .answer h3 { font-size: 1.1em; }
+.answer ul, .answer ol { margin: 8px 0 15px; padding-left: 22px; }
+.answer li { margin: 4px 0; }
+.answer code { font-family: var(--font-mono); font-size: 0.86em; background: var(--color-surface-2); border: 1px solid var(--color-border); border-radius: 5px; padding: 1px 5px; }
+.answer pre { background: #1b1b19; color: #f3f3f0; border-radius: 10px; padding: 16px; overflow-x: auto; margin: 16px 0; }
+.answer pre code { background: none; border: none; padding: 0; color: inherit; font-size: 13px; }
+.answer blockquote { margin: 16px 0; padding: 6px 16px; border-left: 3px solid var(--color-border-strong); color: var(--color-muted); }
+.answer table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 13.5px; }
+.answer th, .answer td { border: 1px solid var(--color-border); padding: 8px 12px; text-align: left; }
+.answer th { background: var(--color-surface); font-weight: 600; }
+.answer .mermaid-rendered { background: var(--color-bg); border: 1px solid var(--color-border); border-radius: 10px; padding: 16px; margin: 16px 0; text-align: center; overflow-x: auto; }
+.answer .mermaid-rendered svg { max-width: 100%; height: auto; }
+.mermaid-err { border-left: 3px solid var(--color-danger); }
+.fig { color: var(--color-tint); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.fig:hover { color: var(--color-tint-strong); }
+
+/* --- sources / calculations / usage ---------------------------------------- */
+.sources { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px; }
+.fig-chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px;
+  background: var(--color-surface); border: 1px solid var(--color-border-strong); border-radius: 999px;
+  color: var(--color-ink); cursor: pointer; font-size: 12.5px; font-weight: 500; transition: all .12s;
+}
+.fig-chip:hover { background: var(--color-tint-soft); border-color: var(--color-tint); }
+.calcs { margin-top: 16px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 10px; padding: 4px 14px; }
+.calcs summary { cursor: pointer; font-size: 13px; color: var(--color-muted); font-weight: 500; padding: 8px 0; user-select: none; }
+.calc-row { font-family: var(--font-mono); font-size: 12.5px; padding: 4px 0; color: var(--color-ink); }
+.calc-row code { background: var(--color-bg); border: 1px solid var(--color-border); border-radius: 4px; padding: 1px 5px; }
+.calc-ok { color: var(--color-tint); font-weight: 700; }
+.calc-warn { color: var(--color-amber); font-weight: 700; }
+.calc-bad { color: var(--color-danger); font-weight: 700; }
+.calc-num { font-family: var(--font-mono); color: var(--color-faint); }
+.calc-legend { margin: 6px 0 4px; font-size: 11px; color: var(--color-faint); border-top: 1px solid var(--color-border); padding-top: 6px; }
+
+/* inline calculation markers inside the answer prose */
+.calc-mark { border-radius: 4px; padding: 0 3px; cursor: help; }
+.calc-mark.verified { background: var(--color-tint-soft); box-shadow: inset 0 -1px 0 var(--color-tint); }
+.calc-mark.unverified { background: #fbf1dd; box-shadow: inset 0 -1px 0 var(--color-amber); }
+.calc-idx { font-size: 0.65em; font-weight: 700; margin-left: 1px; opacity: 0.7; }
+.calc-mark.verified .calc-idx { color: var(--color-tint); }
+.calc-mark.unverified .calc-idx { color: var(--color-amber); }
+
+/* --- tables --------------------------------------------------------------- */
+.answer table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 13.5px; display: table; }
+.answer thead th { background: var(--color-surface); font-weight: 600; }
+.answer th, .answer td { border: 1px solid var(--color-border); padding: 7px 11px; text-align: left; vertical-align: top; }
+.answer tbody tr:nth-child(even) { background: color-mix(in srgb, var(--color-surface) 55%, transparent); }
+.usage { margin-top: 12px; font-family: var(--font-mono); font-size: 11.5px; color: var(--color-faint); }
+.err-text { color: var(--color-danger); font-size: 14px; }
+
+/* --- inline calculation / retrieval timeline ------------------------------- */
+.tl-item {
+  display: flex; align-items: flex-start; gap: 10px;
+  margin: 6px 0; padding: 6px 0 6px 4px;
+  border-left: 2px solid var(--color-border-strong); margin-left: 8px; padding-left: 14px;
+  position: relative;
+}
+.tl-dot {
+  position: absolute; left: -11px; top: 4px; width: 20px; height: 20px;
+  display: flex; align-items: center; justify-content: center; font-size: 12px;
+  background: var(--color-bg); border: 1px solid var(--color-border-strong); border-radius: 50%;
+}
+.tl-body { font-size: 13px; color: var(--color-ink); line-height: 1.5; }
+.tl-label { font-family: var(--font-mono); font-size: 12px; color: var(--color-muted); }
+.tl-args { font-family: var(--font-mono); font-size: 12px; background: var(--color-surface-2); border: 1px solid var(--color-border); border-radius: 5px; padding: 1px 5px; }
+.tl-detail { font-family: var(--font-mono); font-size: 12px; color: var(--color-tint); }
+
+/* --- per-message actions (copy / pdf / regenerate / thread off) ------------- */
+.msg-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+.msg-action {
+  display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
+  border: 1px solid var(--color-border-strong); background: var(--color-bg);
+  color: var(--color-muted); border-radius: 8px; padding: 4px 10px;
+  font-size: 12px; font-family: var(--font-sans); transition: all .12s;
+}
+.msg-action:hover { background: var(--color-surface-2); color: var(--color-ink); border-color: var(--color-muted); }
+.msg-action:active { transform: scale(.96); }

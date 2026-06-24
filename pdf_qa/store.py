@@ -40,6 +40,19 @@ class VectorStore:
             self.vectors = np.vstack([self.vectors, vectors])
         self.chunks.extend(chunks)
 
+    def remove_doc(self, doc_name: str) -> int:
+        """Drop every chunk (and its vector) belonging to `doc_name`. Returns the
+        number of chunks removed. Leaves the store internally consistent; call
+        save() to persist the change to disk."""
+        keep = [i for i, c in enumerate(self.chunks) if c.doc != doc_name]
+        removed = len(self.chunks) - len(keep)
+        if removed == 0:
+            return 0
+        self.chunks = [self.chunks[i] for i in keep]
+        if self.vectors is not None:
+            self.vectors = self.vectors[keep] if keep else self.vectors[:0]
+        return removed
+
     def save(self) -> None:
         self.prefix.parent.mkdir(parents=True, exist_ok=True)
         np.save(self.prefix.with_suffix(".npy"), self.vectors)

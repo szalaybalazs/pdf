@@ -30,7 +30,14 @@ from .store import VectorStore
 from .threads import ThreadStore
 
 
+# A stable id for this backend process, stamped onto every emitted event so a
+# message can be traced through the logs end-to-end.
+SESSION_ID = ""
+
+
 def emit(obj: dict) -> None:
+    if SESSION_ID and "session_id" not in obj:
+        obj = {"session_id": SESSION_ID, **obj}
     sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
     sys.stdout.flush()
 
@@ -44,7 +51,7 @@ def _index_stats(store: VectorStore | None) -> dict:
 
 
 def handle_query(store: VectorStore, req: dict) -> None:
-    from .llm import answer_stream, embed_query, split_thinking
+    from .llm import answer_stream, embed_query, split_thinking, extract_inline_tool_calls
 
     rid = req.get("reqId")
     question = req["question"]
@@ -52,7 +59,11 @@ def handle_query(store: VectorStore, req: dict) -> None:
     debug = bool(req.get("debug"))
     model_id = req.get("model")
     model_spec = config.resolve_model(model_id)
-    model_name = model_spec["openrouter"] if config.USE_OPENROUTER else model_spec["model"]
+    # Local/CLI providers never route through OpenRouter (their slug is empty), so
+    # show their native model id even when OpenRouter is globally enabled.
+    _local = model_spec["provider"] in ("local", "cli")
+    model_name = (model_spec["openrouter"] if (config.USE_OPENROUTER and not _local)
+                  else model_spec["model"]) or model_spec["model"] or model_spec["provider"]
 
     def tool(name, args, detail, debug_lines, t0):
         emit({"type": "tool", "reqId": rid, "name": name, "args": args,
@@ -74,31 +85,123 @@ def handle_query(store: VectorStore, req: dict) -> None:
     tool("search", f"top_k={config.TOP_K}",
          [f"{len(hits)} chunks from {len(docs)} doc(s)"], dbg, t0)
 
-    # 3) collect distinct page images
+    # 3) collect distinct page images.
+    # Force page reading only on the FIRST message of a thread. On follow-ups the
+    # model already has the earlier conversation, so we don't attach page images up
+    # front (cheaper, faster) — it can still pull any page on demand via the
+    # search_documents / get_pages tools.
+    is_followup = bool(history)
     t0 = time.time()
     contexts = [{"doc": c.doc, "page": c.page, "text": c.text} for c, _ in hits]
     images, seen, sources = [], set(), []
-    for c, _ in hits:
-        img = config.resolve_image(c.image_path)   # stored paths are PAGES_DIR-relative
-        if img not in seen:
-            seen.add(img)
-            images.append(img)
-            sources.append({"doc": c.doc, "page": c.page, "image": img})
-        if len(images) >= config.MAX_IMAGES:
-            break
-    dbg = [f"{os.path.basename(p)}  ({_img_dims(p)})" for p in images]
-    tool("collect_pages", f"max={config.MAX_IMAGES}",
-         [f"{s['doc']} p.{s['page']}" for s in sources], dbg, t0)
+    if not is_followup:
+        for c, _ in hits:
+            img = config.resolve_image(c.image_path)   # stored paths are PAGES_DIR-relative
+            if img not in seen:
+                seen.add(img)
+                images.append(img)
+                sources.append({"doc": c.doc, "page": c.page, "image": img})
+            if len(images) >= config.MAX_IMAGES:
+                break
+        dbg = [f"{os.path.basename(p)}  ({_img_dims(p)})" for p in images]
+        tool("collect_pages", f"max={config.MAX_IMAGES}",
+             [f"{s['doc']} p.{s['page']}" for s in sources], dbg, t0)
+    else:
+        tool("collect_pages", "follow-up — no forced page reads",
+             ["pages fetched on demand via search_documents / get_pages"], [], t0)
 
-    # 4) multimodal answer — streamed token by token, with the calculate tool loop
+    # searcher: lets the model fetch MORE pages mid-answer. New page images are
+    # deduped against what's already been sent; new sources accumulate into the
+    # same `sources` list so the answer's figures/citations stay complete.
+    def searcher(q: str, k: int) -> dict:
+        ts = time.time()
+        qv = embed_query(q)
+        hits = store.search(qv, k)
+        new_ctx, new_imgs, new_src = [], [], []
+        for c, _ in hits:
+            new_ctx.append({"doc": c.doc, "page": c.page, "text": c.text})
+            img = config.resolve_image(c.image_path)
+            if img not in seen:
+                seen.add(img)
+                new_imgs.append(img)
+                s = {"doc": c.doc, "page": c.page, "image": img}
+                sources.append(s)
+                new_src.append(s)
+        tool("search_documents", q,
+             [f"{len(new_ctx)} passage(s), {len(new_imgs)} new page(s)"],
+             [f"{s['doc']} p.{s['page']}" for s in new_src], ts)
+        return {"contexts": new_ctx, "images": new_imgs}
+
+    # pager: fetch SPECIFIC pages by number (+ adjacent context). Resolves the page
+    # image straight from disk, so it works even for figure-only pages that have no
+    # text chunk — something semantic search can't reach.
+    known_docs = sorted({c.doc for c in store.chunks})
+
+    def _resolve_doc(name: str):
+        name = (name or "").strip()
+        if name in known_docs:
+            return name
+        low = name.lower()
+        for d in known_docs:
+            if d.lower() == low:
+                return d
+        st = os.path.splitext(name)[0].lower()
+        for d in known_docs:
+            if os.path.splitext(d)[0].lower() == st:
+                return d
+        for d in known_docs:
+            if low and low in d.lower():
+                return d
+        return None
+
+    def pager(doc_req: str, pages: list, context: int) -> dict:
+        ts = time.time()
+        doc = _resolve_doc(doc_req)
+        if not doc:
+            return {"contexts": [], "images": [],
+                    "note": f"No document named '{doc_req}'. Available documents: "
+                            f"{', '.join(known_docs) or '(none)'}."}
+        wanted = sorted({p + d for p in pages for d in range(-context, context + 1) if p + d >= 1})[:12]
+        sample = next((c for c in store.chunks if c.doc == doc), None)
+        subdir = os.path.dirname(sample.image_path) if sample else os.path.splitext(doc)[0].replace(" ", "_")
+        by_page: dict = {}
+        for c in store.chunks:
+            if c.doc == doc and c.page in wanted:
+                by_page.setdefault(c.page, []).append((c.chunk_index, c.text))
+        new_ctx, new_imgs, new_src = [], [], []
+        for pg in wanted:
+            img = config.resolve_image(f"{subdir}/p{pg:04d}.png")
+            if not os.path.exists(img):
+                continue   # page number out of range / never rendered
+            chunks = sorted(by_page.get(pg, []))
+            text = "\n".join(t for _, t in chunks) if chunks else \
+                "(no extractable text on this page — read it from the page image)"
+            new_ctx.append({"doc": doc, "page": pg, "text": text})
+            if img not in seen:
+                seen.add(img)
+                new_imgs.append(img)
+                s = {"doc": doc, "page": pg, "image": img}
+                sources.append(s)
+                new_src.append(s)
+        tool("get_pages", f"{doc} pp.{','.join(str(p) for p in wanted)}",
+             [f"{doc} p.{c['page']}" for c in new_ctx] or ["no matching pages"],
+             [f"p{pg:04d}.png" for pg in wanted], ts)
+        note = None if new_ctx else \
+            f"{doc} has no pages {pages} (with context {context}); they may be out of range."
+        return {"contexts": new_ctx, "images": new_imgs, "note": note}
+
+    # 4) multimodal answer — streamed token by token, with calculate + search + get_pages
     t0 = time.time()
     final = None
-    for ev in answer_stream(question, contexts, images, history=history, model=model_id):
+    for ev in answer_stream(question, contexts, images, history=history,
+                            model=model_id, searcher=searcher, pager=pager):
         if ev["type"] == "delta":
             emit({"type": "delta", "reqId": rid, "text": ev["text"]})
-        elif ev["type"] == "tool_call":  # a calculate() call — show it in the trace
+        elif ev["type"] == "tool_call":  # a calculate()/search()/get_pages() call
+            if ev.get("name") in ("search_documents", "get_pages"):
+                continue  # already emitted a richer trace row inside searcher()/pager()
             mark = "=" if ev["ok"] else "error:"
-            emit({"type": "tool", "reqId": rid, "name": "calculate",
+            emit({"type": "tool", "reqId": rid, "name": ev.get("name", "calculate"),
                   "args": ev["args"], "detail": [f"{mark} {ev['result']}"],
                   "debug": [], "duration": 0})
         else:
@@ -110,13 +213,42 @@ def handle_query(store: VectorStore, req: dict) -> None:
          [f"{final['n_images']} image(s) sent"], dbg, t0)
 
     thinking, ans = split_thinking(final["text"])
+    # Some models emit tool calls inline as text (<tool_call>{...}</tool_call>)
+    # instead of via the API. Strip those from the answer and execute any
+    # calculate payloads so they still show up in the verified-calc panel.
+    ans, inline_calcs = extract_inline_tool_calls(ans)
     # verification (#3): the engine computed each value; flag any that the answer
     # text doesn't actually reflect, so a mis-transcribed number is visible.
-    calcs = final.get("calculations", [])
+    calcs = list(final.get("calculations", [])) + inline_calcs
+    for c in calcs:
+        c["verified"] = bool(c.get("ok") and c.get("result") and str(c["result"]) in ans)
+    # Always reference every calculation in the output: any the model didn't write
+    # into its prose are listed in a Calculations appendix (numbered to match the
+    # [n] markers), then re-verified so they read as referenced. This guarantees a
+    # complete, checkable calc trail even when a model (e.g. a local one) computes
+    # values but omits them from the answer.
+    ans = _append_calc_appendix(ans, calcs)
     for c in calcs:
         c["verified"] = bool(c.get("ok") and c.get("result") and str(c["result"]) in ans)
     emit({"type": "answer", "reqId": rid, "text": ans, "thinking": thinking,
           "sources": sources, "usage": u, "calculations": calcs, "model": model_name})
+
+
+def _append_calc_appendix(ans: str, calcs: list) -> str:
+    """Append a 'Calculations' section listing any calc not already cited in the
+    answer prose, numbered by its index so the renderer's [n] markers line up.
+    Returns ans unchanged when nothing is missing."""
+    missing = [i for i, c in enumerate(calcs) if not c.get("verified")]
+    if not missing:
+        return ans
+    lines = ["", "---", "**Calculations**", ""]
+    for i in missing:
+        c = calcs[i]
+        if c.get("ok") and c.get("result"):
+            lines.append(f"{i + 1}. `{c['expression']}` = {c['result']}")
+        else:
+            lines.append(f"{i + 1}. `{c['expression']}` — error: {c.get('error') or 'failed'}")
+    return ans.rstrip() + "\n" + "\n".join(lines)
 
 
 def _img_dims(path: str) -> str:
@@ -171,6 +303,11 @@ def handle_threads(tstore: ThreadStore, req: dict) -> None:
 
 
 def main(argv=None) -> int:
+    global SESSION_ID
+    import uuid
+    SESSION_ID = uuid.uuid4().hex[:12]
+    print(f"pdf_qa backend session_id={SESSION_ID}", file=sys.stderr, flush=True)
+
     tstore = ThreadStore(config.DB_PATH)
     try:
         store = VectorStore.load(config.STORE_PATH)
@@ -200,6 +337,24 @@ def main(argv=None) -> int:
                 emit({"type": "ready", **_index_stats(store)})
             except Exception as e:  # noqa: BLE001
                 emit({"type": "error", "message": f"reload failed: {e}"})
+        elif kind == "doc_remove":
+            doc = req.get("doc")
+            if store is None:
+                emit({"type": "error", "reqId": req.get("reqId"), "message": "No index loaded."})
+                continue
+            try:
+                removed = store.remove_doc(doc)
+                store.save()
+                # drop the document's rendered page images too
+                import shutil
+                from pathlib import Path
+                pages = config.PAGES_DIR / Path(doc).stem.replace(" ", "_")
+                if pages.exists():
+                    shutil.rmtree(pages, ignore_errors=True)
+                emit({"type": "doc_removed", "doc": doc, "removed": removed})
+                emit({"type": "ready", **_index_stats(store)})
+            except Exception as e:  # noqa: BLE001
+                emit({"type": "error", "reqId": req.get("reqId"), "message": f"remove failed: {e}"})
         elif kind == "query":
             if store is None:
                 emit({"type": "error", "reqId": req.get("reqId"),

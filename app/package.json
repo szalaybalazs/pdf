@@ -5,19 +5,37 @@
   "main": "dist/main.js",
   "scripts": {
     "build:main": "tsc -p tsconfig.main.json",
-    "build:renderer": "tsc -p tsconfig.renderer.json",
-    "build": "npm run build:main && npm run build:renderer",
-    "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.renderer.json --noEmit",
+    "build:renderer": "node build-renderer.mjs",
+    "watch:renderer": "node build-renderer.mjs --watch",
+    "build:css": "tailwindcss -i renderer/app.css -o renderer/styles.css --minify",
+    "watch:css": "tailwindcss -i renderer/app.css -o renderer/styles.css --watch",
+    "build": "npm run build:main && npm run build:renderer && npm run build:css",
+    "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.renderer.json",
     "start": "npm run build && electron .",
     "dev": "npm run build && electron . --enable-logging"
   },
   "devDependencies": {
+    "@tailwindcss/cli": "^4.3.1",
     "@types/node": "^20.11.0",
+    "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.7",
     "electron": "^30.0.0",
+    "esbuild": "^0.28.1",
     "jsdom": "^29.1.1",
+    "tailwindcss": "^4.3.1",
     "typescript": "^5.4.0"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["electron"]
+    "onlyBuiltDependencies": [
+      "electron"
+    ]
+  },
+  "dependencies": {
+    "@trpc/client": "^10.45.4",
+    "@trpc/server": "^10.45.4",
+    "electron-trpc": "^0.7.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zod": "^3.25.76"
   }
 }

@@ -48,6 +48,9 @@ SUMMARY_MODEL = os.getenv("SUMMARY_MODEL", "gpt-4o-mini")
 VISION_MODEL = os.getenv("VISION_MODEL", "gpt-4o")
 # OpenAI's frontier multimodal model, offered as a second OpenAI option in the UI.
 OPENAI_FRONTIER_MODEL = os.getenv("OPENAI_FRONTIER_MODEL", "gpt-5.5")
+# Extra OpenAI options offered in the picker.
+OPENAI_GPT54_MODEL = os.getenv("OPENAI_GPT54_MODEL", "gpt-5.4")
+OPENAI_GPT41_MODEL = os.getenv("OPENAI_GPT41_MODEL", "gpt-4.1")
 
 # Sampling temperature. Reasoning models (o3, o4-mini, some gpt-5.x) reject a
 # custom temperature — set VISION_TEMPERATURE= (empty) to omit it for those.
@@ -58,6 +61,8 @@ VISION_TEMPERATURE = float(_temp) if _temp.strip() != "" else None
 # has no embedding API and the index is built with OpenAI vectors — so only the
 # multimodal answering step switches provider.
 ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-opus-4-8")
+# Claude Sonnet, offered as a second (faster/cheaper) Anthropic option in the UI.
+ANTHROPIC_SONNET_MODEL = os.getenv("ANTHROPIC_SONNET_MODEL", "claude-sonnet-4-6")
 ANTHROPIC_MAX_TOKENS = int(os.getenv("ANTHROPIC_MAX_TOKENS", "4096"))
 
 
@@ -75,6 +80,26 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 USE_OPENROUTER = _bool_env("USE_OPENROUTER", bool(OPENROUTER_API_KEY))
 
+# --- Local models ------------------------------------------------------------
+# Run a locally-installed model CLI as an answerer (no API key — uses your own
+# logged-in session). First supported: the Claude Code CLI in print mode
+# (`claude -p`). Text-only: it answers from the retrieved passage text (it does
+# not receive page images or use our calculate/search tools).
+CLAUDE_CLI_BIN = os.getenv("CLAUDE_CLI_BIN", "claude")
+CLAUDE_CLI_MODEL = os.getenv("CLAUDE_CLI_MODEL", "")   # "" = the CLI's default model
+
+# Local OpenAI-compatible server (Ollama, LM Studio, llama.cpp, vLLM, …). Any of
+# these expose the OpenAI chat API, so we route the answerer at LOCAL_BASE_URL
+# exactly like the remote OpenAI path — page images, the calculate tool, and the
+# search/get_pages tools all work IF the local model supports vision + tool
+# calling (e.g. qwen2.5-vl). Pick a vision model or page images are ignored.
+# Embeddings still use OPENAI_API_KEY: the index is built with OpenAI vectors and
+# can't be queried by a different embedder, so only answering goes local here.
+# Common base URLs: Ollama http://localhost:11434/v1 · LM Studio http://localhost:1234/v1
+LOCAL_BASE_URL = os.getenv("LOCAL_BASE_URL", "")       # "" disables the local option
+LOCAL_API_KEY = os.getenv("LOCAL_API_KEY", "local")    # most local servers ignore it
+LOCAL_MODEL = os.getenv("LOCAL_MODEL", "")             # e.g. "qwen2.5-vl" — server's model id
+
 # Selectable answerer models offered in the UI. Each id maps to a provider, the
 # native model id, and the OpenRouter slug. The renderer builds its picker from
 # this list; `provider` selects the native code path when OpenRouter is off.
@@ -82,8 +107,26 @@ _via = " · OpenRouter" if USE_OPENROUTER else ""
 MODELS = {
     "openai":    {"label": f"OpenAI · {VISION_MODEL}{_via}",          "provider": "openai",    "model": VISION_MODEL,          "openrouter": f"openai/{VISION_MODEL}"},
     "gpt55":     {"label": f"OpenAI · {OPENAI_FRONTIER_MODEL}{_via}", "provider": "openai",    "model": OPENAI_FRONTIER_MODEL, "openrouter": f"openai/{OPENAI_FRONTIER_MODEL}"},
+    "gpt54":     {"label": f"OpenAI · {OPENAI_GPT54_MODEL}{_via}",    "provider": "openai",    "model": OPENAI_GPT54_MODEL,    "openrouter": f"openai/{OPENAI_GPT54_MODEL}"},
+    "gpt41":     {"label": f"OpenAI · {OPENAI_GPT41_MODEL}{_via}",    "provider": "openai",    "model": OPENAI_GPT41_MODEL,    "openrouter": f"openai/{OPENAI_GPT41_MODEL}"},
     "anthropic": {"label": f"Anthropic · Opus{_via}",                 "provider": "anthropic", "model": ANTHROPIC_MODEL,        "openrouter": f"anthropic/{ANTHROPIC_MODEL}"},
+    "sonnet":    {"label": f"Anthropic · Sonnet{_via}",               "provider": "anthropic", "model": ANTHROPIC_SONNET_MODEL, "openrouter": f"anthropic/{ANTHROPIC_SONNET_MODEL}"},
+    "claude-cli": {"label": "Local · claude -p (text only)",          "provider": "cli",       "model": CLAUDE_CLI_MODEL,      "openrouter": ""},
 }
+# Local OpenAI-compatible answerer — only offered when LOCAL_BASE_URL + LOCAL_MODEL
+# are configured, so the picker never shows a dead option. `provider` "local"
+# selects the local-client code path; OpenRouter routing never applies to it.
+if LOCAL_BASE_URL and LOCAL_MODEL:
+    MODELS["local"] = {"label": f"Local · {LOCAL_MODEL}", "provider": "local",
+                       "model": LOCAL_MODEL, "openrouter": ""}
+# Direct-to-OpenAI GPT-5.5 — bypasses OpenRouter (uses OPENAI_API_KEY) even when
+# OpenRouter is globally enabled. The "direct" flag forces the native OpenAI path.
+# Only offered when OpenRouter is on; with it off, the "gpt55" entry above already
+# goes direct, so a second identical option would just be noise.
+if USE_OPENROUTER:
+    MODELS["gpt55-direct"] = {"label": f"OpenAI · {OPENAI_FRONTIER_MODEL} (direct)",
+                              "provider": "openai", "model": OPENAI_FRONTIER_MODEL,
+                              "openrouter": "", "direct": True}
 # Which model is selected by default (must be a key of MODELS).
 DEFAULT_MODEL = os.getenv("ANSWER_MODEL", "openai")
 if DEFAULT_MODEL not in MODELS:

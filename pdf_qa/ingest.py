@@ -81,14 +81,18 @@ def page_text(page: "fitz.Page", img_path: Path, use_ocr: bool) -> tuple[str, st
     return "", "none"
 
 
-def ingest_pdf(pdf_path: Path, store: VectorStore, embed: bool, use_ocr: bool = True) -> dict:
+def ingest_pdf(pdf_path: Path, store: VectorStore, embed: bool, use_ocr: bool = True,
+               progress=None) -> dict:
+    """`progress`, if given, is called as progress(phase, done, total) where phase
+    is "pages" (per rendered/extracted page) or "embed" (vectors being computed)."""
     doc = fitz.open(pdf_path)
     safe = pdf_path.stem.replace(" ", "_")
     pending_chunks: list[Chunk] = []
     pending_texts: list[str] = []
     scanned_pages = failed_pages = ocr_pages = 0
+    n_pages = len(doc)
 
-    for pno in tqdm(range(len(doc)), desc=pdf_path.name[:30], unit="pg", leave=False):
+    for pno in tqdm(range(n_pages), desc=pdf_path.name[:30], unit="pg", leave=False):
         page = doc[pno]
         rel_img = f"{safe}/p{pno+1:04d}.png"          # stored path, relative to PAGES_DIR
         img_path = config.PAGES_DIR / rel_img          # absolute path for rendering
@@ -112,8 +116,13 @@ def ingest_pdf(pdf_path: Path, store: VectorStore, embed: bool, use_ocr: bool = 
             ))
             pending_texts.append(ctext)
 
+        if progress:
+            progress("pages", pno + 1, n_pages)
+
     if embed and pending_texts:
         from .llm import embed_texts
+        if progress:
+            progress("embed", 0, 1)
         vecs = embed_texts(pending_texts)
         store.add(pending_chunks, vecs)
     elif pending_texts:
@@ -156,8 +165,24 @@ def ingest_paths(paths, embed: bool = True, use_ocr: bool = True,
             continue
         if json_out:
             _emit_json({"type": "file_start", "name": p.name, "index": i + 1, "total": len(pdfs)})
+        # Per-page progress -> percentage, throttled so we don't flood stdout.
+        # Pages cover 0–90% of the bar; the embedding pass takes it to 95%, file_done = 100%.
+        last_pct = [-1]
+        def _progress(phase, done, total, _p=p, _i=i):
+            if not json_out:
+                return
+            if phase == "embed":
+                pct = 95
+            else:
+                pct = int(done / total * 90) if total else 90
+            if pct == last_pct[0]:
+                return
+            last_pct[0] = pct
+            _emit_json({"type": "file_progress", "name": _p.name,
+                        "index": _i + 1, "total": len(pdfs),
+                        "page": done, "pages": total, "phase": phase, "percent": pct})
         try:
-            stats = ingest_pdf(p, store, embed=embed, use_ocr=use_ocr)
+            stats = ingest_pdf(p, store, embed=embed, use_ocr=use_ocr, progress=_progress)
             existing.add(p.name)
             added += 1
             if json_out:

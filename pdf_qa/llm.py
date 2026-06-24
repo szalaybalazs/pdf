@@ -30,10 +30,26 @@ def _anthropic_client():
     return Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
 
-def _chat_client():
-    """OpenAI-compatible client for chat/vision/title calls. Routes through
-    OpenRouter when enabled, otherwise the direct OpenAI API. (Embeddings always
-    use the direct OpenAI client via _client() — OpenRouter has no embeddings.)"""
+def _local_client():
+    from openai import OpenAI
+    if not config.LOCAL_BASE_URL:
+        raise RuntimeError(
+            "LOCAL_BASE_URL is not set. Point it at your local server (e.g. "
+            "http://localhost:11434/v1 for Ollama) and set LOCAL_MODEL, or pick a "
+            "different model in the UI."
+        )
+    return OpenAI(api_key=config.LOCAL_API_KEY or "local", base_url=config.LOCAL_BASE_URL)
+
+
+def _chat_client(spec: dict | None = None):
+    """OpenAI-compatible client for chat/vision/title calls. A "local" spec points
+    at LOCAL_BASE_URL; otherwise routes through OpenRouter when enabled, else the
+    direct OpenAI API. (Embeddings always use the direct OpenAI client via
+    _client() — neither OpenRouter nor local servers serve our embedding model.)"""
+    if spec and spec.get("provider") == "local":
+        return _local_client()
+    if spec and spec.get("direct"):
+        return _client()   # force direct OpenAI even when OpenRouter is globally on
     if config.USE_OPENROUTER:
         from openai import OpenAI
         if not config.OPENROUTER_API_KEY:
@@ -115,26 +131,46 @@ SYSTEM_PROMPT = (
     "You are a precise technical assistant for engineering documents (textbooks and "
     "datasheets). You are given (1) extracted text passages and (2) images of the "
     "actual document pages those passages came from.\n"
-    "Use BOTH. When a question depends on a chart, schematic, table or equation, READ "
-    "IT DIRECTLY from the page image — trace curves, read axis values, apply formulas.\n"
-    "YOU ARE EXPECTED TO DO THE MATH. If the documents give an equation, method, graph "
-    "or worked example, APPLY it to the user's specific numbers and compute the answer "
-    "yourself — even when that exact value is not printed in the text. Substitute into "
-    "the equation, show each step and the numbers used, and give the final result with "
-    "units. Reading a value off a graph or interpolating between plotted points is "
-    "expected and encouraged. Treat a question like 'what about 50?' as a request to "
-    "re-evaluate the documented formula at that input, not as a lookup.\n"
-    "Only state that the answer cannot be determined if the documents provide NEITHER "
-    "the data NOR a method/equation to derive it — and then say exactly what is missing. "
-    "Cite sources inline as (filename p.N).\n"
-    "CALCULATIONS: For EVERY arithmetic operation (powers, logs, roots, division, etc.) "
-    "you MUST call the `calculate` tool and use its exact returned value — never compute "
-    "in your head. Whenever you calculate, SHOW THE CALCULATION explicitly in your "
-    "answer: state the formula, substitute the numbers, and write the exact value the "
-    "tool returned. Then VERIFY it: confirm the result is sound — check that the units "
-    "are right and the magnitude is sensible, and where possible plug the value back "
-    "into the relation to confirm it holds. Present every number exactly as the tool "
-    "returned it so it can be checked.\n"
+    "GROUNDING — THIS IS ABSOLUTE:\n"
+    "• Answer ONLY from the provided documents (their text and page images). Do not use "
+    "outside/background knowledge, do not guess, do not assume, and NEVER make anything "
+    "up. Every fact, value, equation and figure you cite must come from the documents.\n"
+    "• You MAY read directly from a chart, schematic, table or equation in a page image "
+    "(trace curves, read axis values) and you MAY apply an equation, method or worked "
+    "example THAT THE DOCUMENTS PROVIDE to the user's specific numbers — that is "
+    "derivation from the source, not guessing. But you may NOT invent values, assume "
+    "unstated parameters, or substitute knowledge the documents don't contain.\n"
+    "• If you are not sure you have all the relevant pages, FETCH MORE before concluding "
+    "anything: use `search_documents` to find related pages by meaning, and use "
+    "`get_pages` to pull a SPECIFIC page by number when a passage points to one (e.g. "
+    "'see Fig. 4.2, p.106' or 'Table 3.2 on p.112') or when you need the page just "
+    "before/after the one you're reading. Use them as many times as needed.\n"
+    "• If, after searching, the documents do NOT contain the needed data or a method to "
+    "derive it, DO NOT guess. Say plainly: \"Not enough data available in the documents\" "
+    "(or similar), state exactly what is missing, and ask the user the specific question(s) "
+    "or for the specific input that would let you proceed. It is correct and expected to "
+    "ask for clarification rather than assume.\n"
+    "• If a parameter the user gave is ambiguous or a question is unclear, ask a "
+    "clarifying question instead of guessing what they meant.\n"
+    "• Cite sources inline as (filename p.N) for every claim.\n"
+    "CALCULATIONS — THIS IS MANDATORY AND NON-NEGOTIABLE:\n"
+    "• Use the `calculate` tool for EVERY single piece of arithmetic, no matter how "
+    "trivial — additions, subtractions, multiplications, divisions, powers, roots, logs, "
+    "unit conversions, percentages, averages, ratios, interpolation between graph points, "
+    "everything. If a number in your answer is the result of ANY computation, it MUST "
+    "come from a `calculate` call. NEVER do arithmetic in your head, and never write a "
+    "computed number that you did not get from the tool.\n"
+    "• Prefer MORE tool calls over fewer: break a multi-step calculation into one "
+    "`calculate` call per step rather than computing several operations at once, so each "
+    "intermediate value is independently tool-verified. When in doubt, call the tool.\n"
+    "• ALWAYS SHOW every calculation explicitly in your answer: state the formula, "
+    "substitute the actual numbers, and write the exact value the tool returned (with "
+    "units). Never hide a calculation or present only the final number.\n"
+    "• ALWAYS VERIFY every result: confirm the units are right and the magnitude is "
+    "sensible, and wherever possible plug the value back into the relation (via another "
+    "`calculate` call) to confirm it holds. State the verification explicitly.\n"
+    "• Present every number EXACTLY as the tool returned it so it can be checked. A "
+    "computed number that did not pass through the tool is an error.\n"
     "FIGURES: You can reference figures, charts, schematics and tables you see in the "
     "page images. When you use one, name it by its label and page — e.g. 'Fig. 4.2 "
     "(Morgan_Jones_Valve_Amplifiers p.106)' — say what you read from it (curve values, "
@@ -153,6 +189,21 @@ THINK_INSTRUCTION = (
 )
 
 
+def _followup_note(history, has_images: bool) -> str:
+    """Per-turn guidance: force page reading on the first message; on follow-ups
+    the model already has the conversation, so only fetch pages if this question
+    actually needs material it doesn't already have."""
+    if not history:
+        return ("Document page images follow. Answer using the passages and by reading "
+                "the page images." if has_images else
+                "Answer using the passages above and the document pages.")
+    base = ("This is a follow-up turn — you already have the earlier conversation "
+            "context. Only fetch more pages (search_documents / get_pages) if THIS "
+            "question needs material you don't already have; don't re-read everything.")
+    return (("Page images follow. " if has_images else
+             "No page images are attached for this follow-up. ") + base)
+
+
 def _build_messages(question, contexts, image_paths, history, think) -> list[dict]:
     text_block = "\n\n".join(
         f"[Passage {i+1}] ({c['doc']} p.{c['page']})\n{c['text']}"
@@ -161,8 +212,7 @@ def _build_messages(question, contexts, image_paths, history, think) -> list[dic
     content: list[dict] = [
         {"type": "text",
          "text": f"Question: {question}\n\nRetrieved passages:\n{text_block}\n\n"
-                 f"Document page images follow. Answer using the passages and by "
-                 f"reading the page images."}
+                 f"{_followup_note(history, bool(image_paths))}"}
     ]
     for p in image_paths:
         content.append({"type": "image_url",
@@ -179,16 +229,55 @@ def _build_messages(question, contexts, image_paths, history, think) -> list[dic
 def split_thinking(text: str) -> tuple[str, str]:
     """Split a model response into (thinking, answer).
 
-    Handles the mid-stream case where <thinking> is open but not yet closed.
+    Removes EVERY <thinking>...</thinking> block wherever it appears — start,
+    middle, or end — and concatenates the rest as the answer. Multiple blocks
+    are supported, and a trailing unclosed <thinking> (mid-stream) is treated as
+    thinking-in-progress so it never leaks into the visible answer.
     """
     import re
-    m = re.search(r"<thinking>(.*?)</thinking>(.*)", text, re.S)
+    parts = re.findall(r"<thinking>(.*?)</thinking>", text, re.S)
+    answer = re.sub(r"<thinking>.*?</thinking>", " ", text, flags=re.S)
+    m = re.search(r"<thinking>(.*)\Z", answer, re.S)   # unclosed tail while streaming
     if m:
-        return m.group(1).strip(), m.group(2).strip()
-    m = re.search(r"<thinking>(.*)", text, re.S)
-    if m:
-        return m.group(1).strip(), ""
-    return "", text.strip()
+        parts.append(m.group(1))
+        answer = answer[:m.start()]
+    thinking = "\n\n".join(p.strip() for p in parts if p.strip()).strip()
+    return thinking, answer.strip()
+
+
+def extract_inline_tool_calls(text: str) -> tuple[str, list]:
+    """Some models emit tool calls as inline `<tool_call>{json}</tool_call>` text
+    instead of through the tool API, which would otherwise leak into the answer.
+
+    Strip every such block from the visible answer and, for `calculate`-style
+    payloads ({"expression": "...", "units": bool}), actually run the calculation
+    so it still appears in the verified-calculations panel. Returns
+    (clean_text, calcs) where each calc matches the {expression, ok, result,
+    error} shape used elsewhere. A trailing unclosed <tool_call> (mid-stream) is
+    dropped too.
+    """
+    import json
+    import re
+    from . import calc
+    calcs: list = []
+
+    def _run(m) -> str:
+        raw = m.group(1).strip()
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            return ""   # not JSON we understand — just remove the markup
+        expr = str(payload.get("expression", "")).strip()
+        if expr:
+            res = calc.evaluate(expr, bool(payload.get("units")))
+            calcs.append({"expression": expr, "ok": res["ok"],
+                          "result": res.get("text"), "error": res.get("error")})
+        return ""
+
+    clean = re.sub(r"<tool_call>(.*?)</tool_call>", _run, text, flags=re.S)
+    clean = re.sub(r"<tool_call>.*\Z", "", clean, flags=re.S)   # unclosed tail
+    clean = re.sub(r"\n{3,}", "\n\n", clean).strip()
+    return clean, calcs
 
 
 def _usage_dict(usage) -> dict:
@@ -256,7 +345,91 @@ ANTHROPIC_CALC_TOOL = {
     "input_schema": CALC_TOOL["function"]["parameters"],
 }
 
-_MAX_TOOL_ROUNDS = 8
+# Lets the model fetch MORE pages/passages when the first retrieval pass didn't
+# surface everything it needs to answer fully and accurately.
+SEARCH_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "search_documents",
+        "description": (
+            "Search the indexed PDF library for ADDITIONAL passages and page images. "
+            "Call this whenever the material you already have is not enough to answer "
+            "completely and accurately from the documents — e.g. you need another "
+            "section, a referenced figure/table, a datasheet rating, or a different part "
+            "of the document. You may call it as many times as needed. It returns more "
+            "passages (with their (filename p.N) citations) and adds the matching page "
+            "images to the conversation for you to read. If after searching the documents "
+            "still don't contain the needed data or method, say so explicitly."),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string",
+                          "description": "What to look for, in natural language, e.g. "
+                                         "'6N1P maximum plate dissipation' or 'output "
+                                         "transformer primary impedance table'."},
+                "k": {"type": "integer",
+                      "description": "How many passages to retrieve (default 6, max 12)."},
+            },
+            "required": ["query"],
+        },
+    },
+}
+ANTHROPIC_SEARCH_TOOL = {
+    "name": SEARCH_TOOL["function"]["name"],
+    "description": SEARCH_TOOL["function"]["description"],
+    "input_schema": SEARCH_TOOL["function"]["parameters"],
+}
+
+# Fetch SPECIFIC pages by number (and optionally adjacent ones). Unlike
+# search_documents (semantic), this is page-addressed: use it when a passage
+# references a precise page/figure/table ("see Fig. 4.2, p.106", "Table 3.2 on
+# p.112") or when you need the page just before/after the one you're reading.
+# It can also retrieve figure-only pages that carry no searchable text.
+GET_PAGES_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "get_pages",
+        "description": (
+            "Fetch specific page images (and their text, if any) from a document by "
+            "PAGE NUMBER. Use this when you need an exact page — e.g. a passage points to "
+            "'see p.112' or 'Fig. 4.2 (p.106)', or you want the page right before/after the "
+            "one you're reading. Unlike search_documents, this is addressed by number and "
+            "can also return figure-only pages that have no searchable text. Give the "
+            "document filename exactly as it appears in the (filename p.N) citations."),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "doc": {"type": "string",
+                        "description": "Document filename as shown in citations, e.g. 'Morgan_Jones_Valve_Amplifiers.pdf'."},
+                "pages": {"type": "array", "items": {"type": "integer"},
+                          "description": "1-based page numbers to fetch, e.g. [106] or [111, 112]."},
+                "context": {"type": "integer",
+                            "description": "Also include this many pages before AND after each requested page (default 0, max 3)."},
+            },
+            "required": ["doc", "pages"],
+        },
+    },
+}
+ANTHROPIC_GET_PAGES_TOOL = {
+    "name": GET_PAGES_TOOL["function"]["name"],
+    "description": GET_PAGES_TOOL["function"]["description"],
+    "input_schema": GET_PAGES_TOOL["function"]["parameters"],
+}
+
+
+def _format_passages(contexts: list[dict]) -> str:
+    """Render retrieved passages as the text a search tool-call returns."""
+    if not contexts:
+        return "No additional passages found for that query."
+    return "\n\n".join(
+        f"[{c['doc']} p.{c['page']}]\n{c['text']}" for c in contexts
+    )
+
+
+# Safety backstop only: the loop runs until the model stops requesting tools, but
+# we cap iterations far above any real need so a misbehaving model can't spin
+# forever (and rack up cost). Effectively "unlimited" for normal use.
+_MAX_TOOL_ROUNDS = 100
 
 
 def _run_calc(tc_name: str, raw_args: str, collected: list) -> str:
@@ -323,40 +496,148 @@ def _add_usage(tot: dict, usage) -> None:
         tot["reasoning"] += getattr(det, "reasoning_tokens", 0) or 0
 
 
+def _search_query(raw_args: str) -> str:
+    import json
+    try:
+        return str(json.loads(raw_args or "{}").get("query", ""))
+    except Exception:
+        return ""
+
+
+def _pages_summary(raw_args: str) -> str:
+    import json
+    try:
+        a = json.loads(raw_args or "{}")
+        pages = a.get("pages") or []
+        return f"{a.get('doc', '?')} pp.{','.join(str(p) for p in pages)}"
+    except Exception:
+        return ""
+
+
+def _run_search(raw_args: str, searcher) -> tuple[dict, list]:
+    """Run a search_documents tool call. Returns (result, new_image_paths) where
+    result = {"text": passages-as-text, "n": passage_count}."""
+    import json
+    try:
+        args = json.loads(raw_args or "{}")
+    except Exception:
+        args = {}
+    query = str(args.get("query", "")).strip()
+    try:
+        k = int(args.get("k") or 6)
+    except Exception:
+        k = 6
+    k = max(1, min(k, 12))
+    found = searcher(query, k) if query else {"contexts": [], "images": []}
+    ctx = found.get("contexts", [])
+    return {"text": _format_passages(ctx), "n": len(ctx)}, found.get("images", [])
+
+
+def _run_get_pages(raw_args: str, pager) -> tuple[dict, list]:
+    """Run a get_pages tool call. Returns (result, new_image_paths) where
+    result = {"text": passages-as-text, "n": page_count}."""
+    import json
+    try:
+        args = json.loads(raw_args or "{}")
+    except Exception:
+        args = {}
+    doc = str(args.get("doc", "")).strip()
+    raw_pages = args.get("pages") or []
+    pages = []
+    for p in raw_pages if isinstance(raw_pages, list) else [raw_pages]:
+        try:
+            pages.append(int(p))
+        except Exception:
+            continue
+    try:
+        context = int(args.get("context") or 0)
+    except Exception:
+        context = 0
+    context = max(0, min(context, 3))
+    found = pager(doc, pages, context) if (doc and pages) else {"contexts": [], "images": []}
+    ctx = found.get("contexts", [])
+    text = found.get("note") or _format_passages(ctx)
+    return {"text": text, "n": len(ctx)}, found.get("images", [])
+
+
 def answer_stream(question: str, contexts: list[dict], image_paths: list[str],
                   history: list[dict] | None = None, think: bool = True,
-                  model: str | None = None):
-    """Streaming answer generator with the calculate tool loop.
+                  model: str | None = None, searcher=None, pager=None):
+    """Streaming answer generator with the calculate + search + get_pages loop.
 
-    `model` is a UI model id (see config.MODELS); it selects the provider. Yields
-    {"type":"delta","text"}, {"type":"tool_call","name","args","ok","result"} for
-    each calculation, then {"type":"final","text","usage","calculations",...}.
+    `model` is a UI model id (see config.MODELS); it selects the provider.
+    `searcher(query, k)` retrieves more pages by relevance; `pager(doc, pages,
+    context)` fetches specific pages by number. Both return {"contexts":[...],
+    "images":[paths]} and let the model read more pages mid-answer. Yields
+    {"type":"delta","text"}, {"type":"tool_call","name","args","ok","result"} per
+    tool use, then {"type":"final","text","usage","calculations",...}.
     """
     spec = config.resolve_model(model)
+    # Local CLI models run on the machine (no API) — handle before any remote path.
+    if spec["provider"] == "cli":
+        yield from _answer_stream_cli(question, contexts, image_paths, history, think, spec["model"])
+        return
+    # Local OpenAI-compatible server: same streaming path as remote OpenAI, but the
+    # client points at LOCAL_BASE_URL and we send the server's native model id
+    # (OpenRouter routing never applies to a local model).
+    if spec["provider"] == "local":
+        yield from _answer_stream_openai(question, contexts, image_paths, history,
+                                         think, spec["model"], searcher, pager, spec=spec)
+        return
+    # Direct-to-OpenAI override: send the native model id straight to OpenAI,
+    # skipping OpenRouter even when it's globally enabled.
+    if spec.get("direct"):
+        yield from _answer_stream_openai(question, contexts, image_paths, history,
+                                         think, spec["model"], searcher, pager, spec=spec)
+        return
     # When OpenRouter is on, everything (incl. Claude) goes through the OpenAI-
     # compatible path; otherwise Anthropic uses its native SDK path.
     if not config.USE_OPENROUTER and spec["provider"] == "anthropic":
         yield from _answer_stream_anthropic(question, contexts, image_paths,
-                                            history, think, spec["model"])
+                                            history, think, spec["model"], searcher, pager)
     else:
         yield from _answer_stream_openai(question, contexts, image_paths,
-                                         history, think, _chat_model_id(spec))
+                                         history, think, _chat_model_id(spec), searcher, pager)
 
 
 def _answer_stream_openai(question: str, contexts: list[dict], image_paths: list[str],
-                          history: list[dict] | None, think: bool, model: str):
+                          history: list[dict] | None, think: bool, model: str,
+                          searcher=None, pager=None, spec: dict | None = None):
     import time
-    client = _chat_client()
+    client = _chat_client(spec)
     messages = _build_messages(question, contexts, image_paths, history, think)
+    tools = [CALC_TOOL] + ([SEARCH_TOOL] if searcher else []) + ([GET_PAGES_TOOL] if pager else [])
     t0 = time.time()
     content_all: list = []
     calculations: list = []
     usage_tot = _new_usage()
+    pending = False   # last round still wanted tools but we ran out of rounds
+    tools_ok = bool(tools)   # some local (Ollama) vision models reject `tools` — drop them on first failure
+
+    def _open_stream(tool_choice: str | None = None):
+        """Start a chat stream, gracefully degrading if the server can't do tools.
+        Local vision models often 400 with 'does not support tools'; in that case we
+        retry without tools (the calculate/search tools just go unused)."""
+        nonlocal tools_ok
+        kw = dict(messages=messages, stream=True,
+                  stream_options={"include_usage": True}, **_chat_kwargs(model))
+        if tools_ok and tools:
+            kw["tools"] = tools
+            if tool_choice:
+                kw["tool_choice"] = tool_choice
+        try:
+            return client.chat.completions.create(**kw)
+        except Exception as e:  # noqa: BLE001
+            msg = str(e).lower()
+            if tools_ok and tools and "support" in msg and "tool" in msg:
+                tools_ok = False
+                kw.pop("tools", None)
+                kw.pop("tool_choice", None)
+                return client.chat.completions.create(**kw)
+            raise
 
     for _ in range(_MAX_TOOL_ROUNDS):
-        stream = client.chat.completions.create(
-            messages=messages, tools=[CALC_TOOL], stream=True,
-            stream_options={"include_usage": True}, **_chat_kwargs(model))
+        stream = _open_stream()
         round_content: list = []
         tool_calls: dict = {}
         for chunk in stream:
@@ -380,25 +661,124 @@ def _answer_stream_openai(question: str, contexts: list[dict], image_paths: list
                     slot["args"] += fn.arguments
 
         if not tool_calls:
+            pending = False
             break
+        pending = True
         # record the assistant turn that requested the tools, then run them
         messages.append({"role": "assistant", "content": "".join(round_content) or None,
                          "tool_calls": [{"id": tool_calls[i]["id"] or f"call_{i}", "type": "function",
                                          "function": {"name": tool_calls[i]["name"],
                                                       "arguments": tool_calls[i]["args"] or "{}"}}
                                         for i in sorted(tool_calls)]})
+        new_images: list = []   # page images any search() asked for, added after tool results
         for i in sorted(tool_calls):
             c = tool_calls[i]
             cid = c["id"] or f"call_{i}"
-            out = _run_calc(c["name"], c["args"], calculations)
-            if c["name"] == "calculate" and calculations:
-                last = calculations[-1]
-                yield {"type": "tool_call", "name": "calculate", "args": last["expression"],
-                       "ok": last["ok"], "result": last["result"] or last["error"]}
-            messages.append({"role": "tool", "tool_call_id": cid, "content": out})
+            if c["name"] == "search_documents" and searcher:
+                out, imgs = _run_search(c["args"], searcher)
+                new_images.extend(imgs)
+                yield {"type": "tool_call", "name": "search_documents",
+                       "args": _search_query(c["args"]),
+                       "ok": True, "result": f"{out['n']} passage(s), {len(imgs)} new page(s)"}
+                messages.append({"role": "tool", "tool_call_id": cid, "content": out["text"]})
+            elif c["name"] == "get_pages" and pager:
+                out, imgs = _run_get_pages(c["args"], pager)
+                new_images.extend(imgs)
+                yield {"type": "tool_call", "name": "get_pages", "args": _pages_summary(c["args"]),
+                       "ok": True, "result": f"{out['n']} page(s), {len(imgs)} image(s)"}
+                messages.append({"role": "tool", "tool_call_id": cid, "content": out["text"]})
+            else:
+                res = _run_calc(c["name"], c["args"], calculations)
+                if c["name"] == "calculate" and calculations:
+                    last = calculations[-1]
+                    yield {"type": "tool_call", "name": "calculate", "args": last["expression"],
+                           "ok": last["ok"], "result": last["result"] or last["error"]}
+                messages.append({"role": "tool", "tool_call_id": cid, "content": res})
+        if new_images:   # OpenAI: images can't ride in tool results, so add a user turn
+            content = [{"type": "text", "text": "Additional page images you requested:"}]
+            for p in new_images:
+                content.append({"type": "image_url",
+                                "image_url": {"url": _image_data_url(p, config.VISION_MAX_DIM)}})
+            messages.append({"role": "user", "content": content})
+
+    # If the model kept calling tools until the round budget ran out, it never
+    # produced a final answer — force one more turn with tools disabled so the
+    # user always gets a rendered response (not just the tool-call trace).
+    if pending:
+        stream = _open_stream(tool_choice="none")
+        for chunk in stream:
+            _add_usage(usage_tot, getattr(chunk, "usage", None))
+            if not chunk.choices:
+                continue
+            c = getattr(chunk.choices[0].delta, "content", None)
+            if c:
+                content_all.append(c)
+                yield {"type": "delta", "text": c}
 
     yield {"type": "final", "text": "".join(content_all), "latency": time.time() - t0,
            "n_images": len(image_paths), "usage": usage_tot, "calculations": calculations}
+
+
+# ---- Local CLI path (claude -p) ---------------------------------------------
+
+def _answer_stream_cli(question: str, contexts: list[dict], image_paths: list[str],
+                       history: list[dict] | None, think: bool, model: str):
+    """Answer via a locally-installed model CLI (Claude Code's `claude -p`).
+
+    Text-only: the CLI receives the retrieved passage text + question and streams
+    its answer. It does not get the page images or our calculate/search tools, and
+    it uses the user's own logged-in CLI session (no API key)."""
+    import shutil
+    import subprocess
+    import time
+    t0 = time.time()
+    binname = config.CLAUDE_CLI_BIN
+
+    if not shutil.which(binname):
+        yield {"type": "final",
+               "text": f"Local Claude CLI not found (`{binname}`). Install Claude Code and run "
+                       f"`claude login`, or set CLAUDE_CLI_BIN to its path.",
+               "latency": 0, "n_images": 0, "usage": _new_usage(), "calculations": []}
+        return
+
+    passages = "\n\n".join(
+        f"[{c['doc']} p.{c['page']}]\n{c['text']}" for c in contexts) or "(no passages retrieved)"
+    hist = ""
+    if history:
+        hist = "\n\n".join(f"{h['role'].upper()}: {h['content']}" for h in history) + "\n\n"
+    prompt = (f"{hist}Retrieved passages from the indexed PDF library:\n{passages}\n\n"
+              f"Question: {question}")
+
+    args = [binname, "-p", "--append-system-prompt", SYSTEM_PROMPT]
+    if model:
+        args += ["--model", model]
+
+    try:
+        proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, bufsize=1)
+    except Exception as e:  # noqa: BLE001
+        yield {"type": "final", "text": f"Could not launch `{binname}`: {e}",
+               "latency": 0, "n_images": 0, "usage": _new_usage(), "calculations": []}
+        return
+
+    assert proc.stdin and proc.stdout and proc.stderr
+    try:
+        proc.stdin.write(prompt)
+        proc.stdin.close()   # EOF — also prevents the CLI blocking on an interactive prompt
+    except Exception:
+        pass
+
+    chunks: list = []
+    for line in proc.stdout:
+        chunks.append(line)
+        yield {"type": "delta", "text": line}
+    proc.wait()
+    err = (proc.stderr.read() or "").strip()
+    text = "".join(chunks).strip()
+    if not text:
+        text = f"Claude CLI produced no output{(': ' + err[:500]) if err else '.'}"
+    yield {"type": "final", "text": text, "latency": time.time() - t0,
+           "n_images": 0, "usage": _new_usage(), "calculations": []}
 
 
 # ---- Anthropic (Claude) path ------------------------------------------------
@@ -414,8 +794,7 @@ def _build_anthropic_messages(question, contexts, image_paths, history) -> list[
     content: list[dict] = [
         {"type": "text",
          "text": f"Question: {question}\n\nRetrieved passages:\n{text_block}\n\n"
-                 f"Document page images follow. Answer using the passages and by "
-                 f"reading the page images."}
+                 f"{_followup_note(history, bool(image_paths))}"}
     ]
     for p in image_paths:
         content.append({"type": "image",
@@ -429,21 +808,26 @@ def _build_anthropic_messages(question, contexts, image_paths, history) -> list[
 
 
 def _answer_stream_anthropic(question: str, contexts: list[dict], image_paths: list[str],
-                             history: list[dict] | None, think: bool, model: str):
+                             history: list[dict] | None, think: bool, model: str,
+                             searcher=None, pager=None):
     import json
     import time
     client = _anthropic_client()
     messages = _build_anthropic_messages(question, contexts, image_paths, history)
     system = SYSTEM_PROMPT + (THINK_INSTRUCTION if think else "")
+    tools = ([ANTHROPIC_CALC_TOOL]
+             + ([ANTHROPIC_SEARCH_TOOL] if searcher else [])
+             + ([ANTHROPIC_GET_PAGES_TOOL] if pager else []))
     t0 = time.time()
     content_all: list = []
     calculations: list = []
     usage_tot = _new_usage()
+    pending = False   # last round still wanted tools but we ran out of rounds
 
     for _ in range(_MAX_TOOL_ROUNDS):
         with client.messages.stream(
             model=model, max_tokens=config.ANTHROPIC_MAX_TOKENS, system=system,
-            messages=messages, tools=[ANTHROPIC_CALC_TOOL],
+            messages=messages, tools=tools,
         ) as stream:
             for text in stream.text_stream:
                 content_all.append(text)
@@ -469,18 +853,57 @@ def _answer_stream_anthropic(question: str, contexts: list[dict], image_paths: l
                 tool_uses.append(block)
 
         if not tool_uses:
+            pending = False
             break
+        pending = True
 
         messages.append({"role": "assistant", "content": assistant_content})
         tool_results: list = []
         for block in tool_uses:
-            out = _run_calc(block.name, json.dumps(block.input or {}), calculations)
-            if block.name == "calculate" and calculations:
-                last = calculations[-1]
-                yield {"type": "tool_call", "name": "calculate", "args": last["expression"],
-                       "ok": last["ok"], "result": last["result"] or last["error"]}
-            tool_results.append({"type": "tool_result", "tool_use_id": block.id, "content": out})
+            if block.name in ("search_documents", "get_pages") and (searcher or pager):
+                if block.name == "get_pages":
+                    res, imgs = _run_get_pages(json.dumps(block.input or {}), pager)
+                    yield {"type": "tool_call", "name": "get_pages",
+                           "args": _pages_summary(json.dumps(block.input or {})),
+                           "ok": True, "result": f"{res['n']} page(s), {len(imgs)} image(s)"}
+                else:
+                    res, imgs = _run_search(json.dumps(block.input or {}), searcher)
+                    yield {"type": "tool_call", "name": "search_documents",
+                           "args": str((block.input or {}).get("query", "")),
+                           "ok": True, "result": f"{res['n']} passage(s), {len(imgs)} new page(s)"}
+                # Anthropic tool_result may carry image blocks directly.
+                content_blocks: list = [{"type": "text", "text": res["text"]}]
+                for p in imgs:
+                    content_blocks.append({"type": "image", "source": {
+                        "type": "base64", "media_type": "image/jpeg",
+                        "data": _image_jpeg_b64(p, config.VISION_MAX_DIM)}})
+                tool_results.append({"type": "tool_result", "tool_use_id": block.id,
+                                     "content": content_blocks})
+            else:
+                out = _run_calc(block.name, json.dumps(block.input or {}), calculations)
+                if block.name == "calculate" and calculations:
+                    last = calculations[-1]
+                    yield {"type": "tool_call", "name": "calculate", "args": last["expression"],
+                           "ok": last["ok"], "result": last["result"] or last["error"]}
+                tool_results.append({"type": "tool_result", "tool_use_id": block.id, "content": out})
         messages.append({"role": "user", "content": tool_results})
+
+    # Ran out of tool rounds without a final answer — force one more turn with
+    # tools disabled so the user always gets a rendered response.
+    if pending:
+        with client.messages.stream(
+            model=model, max_tokens=config.ANTHROPIC_MAX_TOKENS, system=system,
+            messages=messages, tools=tools, tool_choice={"type": "none"},
+        ) as stream:
+            for text in stream.text_stream:
+                content_all.append(text)
+                yield {"type": "delta", "text": text}
+            fin = stream.get_final_message()
+        u = getattr(fin, "usage", None)
+        if u:
+            usage_tot["prompt"] += getattr(u, "input_tokens", 0) or 0
+            usage_tot["completion"] += getattr(u, "output_tokens", 0) or 0
+            usage_tot["total"] = usage_tot["prompt"] + usage_tot["completion"]
 
     yield {"type": "final", "text": "".join(content_all), "latency": time.time() - t0,
            "n_images": len(image_paths), "usage": usage_tot, "calculations": calculations}

@@ -55,7 +55,13 @@ class VectorStore:
 
     def save(self) -> None:
         self.prefix.parent.mkdir(parents=True, exist_ok=True)
-        np.save(self.prefix.with_suffix(".npy"), self.vectors)
+        # Never hand np.save a None/object array — it would serialize a 0-d
+        # object array that can only be reloaded with allow_pickle=True. Persist
+        # an empty float32 matrix instead so load() always gets a real ndarray.
+        mat = self.vectors
+        if mat is None:
+            mat = np.empty((0, 0), dtype=np.float32)
+        np.save(self.prefix.with_suffix(".npy"), np.asarray(mat, dtype=np.float32))
         with open(self.prefix.with_suffix(".jsonl"), "w", encoding="utf-8") as f:
             for c in self.chunks:
                 f.write(json.dumps(asdict(c), ensure_ascii=False) + "\n")
@@ -64,21 +70,39 @@ class VectorStore:
     @classmethod
     def load(cls, prefix: Path) -> "VectorStore":
         store = cls(prefix)
-        store.vectors = np.load(prefix.with_suffix(".npy"))
+        # allow_pickle=True so we can still recover stores written by older
+        # builds that saved a 0-d object array for an empty/None matrix.
+        vectors = np.load(prefix.with_suffix(".npy"), allow_pickle=True)
+        if vectors.dtype == object or vectors.ndim != 2 or vectors.size == 0:
+            # Empty or legacy object-array store: treat as no vectors so add()
+            # and search() take their None-handling paths.
+            store.vectors = None
+        else:
+            store.vectors = np.asarray(vectors, dtype=np.float32)
         store.chunks = []
         with open(prefix.with_suffix(".jsonl"), encoding="utf-8") as f:
             for line in f:
                 store.chunks.append(Chunk(**json.loads(line)))
         return store
 
-    def search(self, query_vec: np.ndarray, top_k: int) -> list[tuple[Chunk, float]]:
+    def search(self, query_vec: np.ndarray, top_k: int,
+               docs: Iterable[str] | None = None) -> list[tuple[Chunk, float]]:
         q = np.asarray(query_vec, dtype=np.float32)
         q /= (np.linalg.norm(q) + 1e-9)
         mat = self.vectors
+        if docs is not None:
+            allowed = set(docs)
+            idxs = [i for i, c in enumerate(self.chunks) if c.doc in allowed]
+            if not idxs:
+                return []
+            mat = mat[idxs]
+            chunks = [self.chunks[i] for i in idxs]
+        else:
+            chunks = self.chunks
         mat_norm = mat / (np.linalg.norm(mat, axis=1, keepdims=True) + 1e-9)
         scores = mat_norm @ q
         idx = np.argsort(-scores)[:top_k]
-        return [(self.chunks[i], float(scores[i])) for i in idx]
+        return [(chunks[i], float(scores[i])) for i in idx]
 
     def __len__(self) -> int:
         return len(self.chunks)

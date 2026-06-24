@@ -15,6 +15,17 @@ export interface AppSettings {
   openaiKey: string; anthropicKey: string; openrouterKey: string; systemPrompt: string; dataDir?: string;
 }
 
+// Auto-update state pushed to the renderer (drives the sidebar "Restart to
+// update" indicator). The download happens in the background; the renderer only
+// reacts to these state transitions.
+export type UpdateStatus = "available" | "downloading" | "downloaded" | "error";
+export interface UpdateState {
+  status: UpdateStatus;
+  version?: string;
+  percent?: number;
+  message?: string;
+}
+
 export interface RouterDeps {
   bus: EventEmitter;                       // emits "serve-event" | "ingest-event" | "serve-log"
   drainServeBuffer: () => unknown[];       // serve events buffered before first subscriber
@@ -26,8 +37,11 @@ export interface RouterDeps {
   openDoc: (name: string) => Promise<string>;
   removeDoc: (name: string) => Promise<void>;
   addPdfs: () => Promise<{ canceled: boolean; count?: number }>;
+  addTempPdfs: (input: { threadId: string; filePaths: string[] }) => Promise<{ ok: boolean; docs: string[] }>;
   exportPdf: (input: { html: string; title: string }) => Promise<string>;
   showDocMenu: (name: string) => Promise<void>;
+  getUpdateState: () => UpdateState | null;   // current update state for late subscribers
+  installUpdate: () => boolean;               // quit + install; false = dev no-op
 }
 
 const t = initTRPC.create({ isServer: true });
@@ -49,11 +63,23 @@ export function createAppRouter(deps: RouterDeps) {
     openDoc: t.procedure.input(z.string()).mutation(({ input }) => deps.openDoc(input)),
     removeDoc: t.procedure.input(z.string()).mutation(async ({ input }) => { await deps.removeDoc(input); return true; }),
     addPdfs: t.procedure.mutation(() => deps.addPdfs()),
+    addTempPdfs: t.procedure.input(z.object({
+      threadId: z.string(),
+      filePaths: z.array(z.string()),
+    })).mutation(({ input }) => deps.addTempPdfs(input)),
     exportPdf: t.procedure.input(z.object({ html: z.string(), title: z.string() }))
       .mutation(({ input }) => deps.exportPdf(input)),
     showDocMenu: t.procedure.input(z.string()).mutation(async ({ input }) => { await deps.showDocMenu(input); return true; }),
+    installUpdate: t.procedure.mutation(() => deps.installUpdate()),
 
     // --- streamed backend feeds --------------------------------------------
+    updateEvents: t.procedure.subscription(() => observable<UpdateState>((emit) => {
+      const current = deps.getUpdateState();
+      if (current) emit.next(current);                  // replay latest state to a late subscriber
+      const h = (ev: UpdateState) => emit.next(ev);
+      deps.bus.on("update-event", h);
+      return () => deps.bus.off("update-event", h);
+    })),
     serveEvents: t.procedure.subscription(() => observable<any>((emit) => {
       deps.markServeSubscribed();
       for (const ev of deps.drainServeBuffer()) emit.next(ev);   // replay anything emitted pre-subscribe

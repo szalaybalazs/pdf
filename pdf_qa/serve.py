@@ -24,6 +24,7 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
 
 from . import config
 from .store import VectorStore
@@ -33,6 +34,7 @@ from .threads import ThreadStore
 # A stable id for this backend process, stamped onto every emitted event so a
 # message can be traced through the logs end-to-end.
 SESSION_ID = ""
+TEMP_STORES: dict[str, list[VectorStore]] = {}
 
 
 def emit(obj: dict) -> None:
@@ -50,7 +52,59 @@ def _index_stats(store: VectorStore | None) -> dict:
             "models": models, "default_model": config.DEFAULT_MODEL}
 
 
-def handle_query(store: VectorStore, req: dict) -> None:
+def _thread_stores(store: VectorStore | None, req: dict) -> list[VectorStore]:
+    tid = req.get("threadId")
+    stores = [store] if store is not None else []
+    if tid:
+        stores.extend(TEMP_STORES.get(tid, []))
+    return stores
+
+
+def _docs_in(stores: list[VectorStore]) -> list[str]:
+    return sorted({c.doc for s in stores for c in s.chunks})
+
+
+def _search_stores(stores: list[VectorStore], qvec, top_k: int,
+                   docs: list[str] | None = None):
+    hits = []
+    for s in stores:
+        hits.extend(s.search(qvec, top_k, docs=docs))
+    return sorted(hits, key=lambda h: h[1], reverse=True)[:top_k]
+
+
+def handle_temp_index(req: dict) -> None:
+    tid = req.get("threadId")
+    prefix = req.get("prefix")
+    if not tid or not prefix:
+        emit({"type": "error", "message": "temp index missing threadId or prefix"})
+        return
+    store = VectorStore.load(Path(prefix))
+    pages_dir = Path(prefix).parent / "pages"
+    for c in store.chunks:
+        if not os.path.isabs(c.image_path):
+            c.image_path = str(pages_dir / c.image_path)
+    TEMP_STORES.setdefault(tid, []).append(store)
+    emit({"type": "temp_indexed", "threadId": tid,
+          "docs": sorted({c.doc for c in store.chunks}),
+          "chunks": len(store)})
+
+
+def handle_temp_index_clone(req: dict) -> None:
+    src = req.get("fromThreadId")
+    dst = req.get("toThreadId")
+    if not src or not dst:
+        return
+    if src in TEMP_STORES:
+        TEMP_STORES[dst] = list(TEMP_STORES[src])
+
+
+def handle_temp_index_clear(req: dict) -> None:
+    tid = req.get("threadId")
+    if tid:
+        TEMP_STORES.pop(tid, None)
+
+
+def handle_query(store: VectorStore | None, req: dict) -> None:
     from .llm import answer_stream, embed_query, split_thinking, extract_inline_tool_calls
 
     rid = req.get("reqId")
@@ -58,6 +112,21 @@ def handle_query(store: VectorStore, req: dict) -> None:
     history = req.get("history") or []
     debug = bool(req.get("debug"))
     model_id = req.get("model")
+    stores = _thread_stores(store, req)
+    if not stores:
+        emit({"type": "error", "reqId": rid,
+              "message": "No index found. Add PDFs to build the index first."})
+        return
+    all_docs = _docs_in(stores)
+    requested_docs = req.get("docs")
+    doc_filter = None
+    if isinstance(requested_docs, list):
+        requested = [d for d in requested_docs if isinstance(d, str)]
+        doc_filter = [d for d in all_docs if d in set(requested)]
+        if not doc_filter:
+            emit({"type": "error", "reqId": rid,
+                  "message": "No documents are enabled for this chat."})
+            return
     model_spec = config.resolve_model(model_id)
     # Local/CLI providers never route through OpenRouter (their slug is empty), so
     # show their native model id even when OpenRouter is globally enabled.
@@ -78,11 +147,12 @@ def handle_query(store: VectorStore, req: dict) -> None:
 
     # 2) search
     t0 = time.time()
-    hits = store.search(qvec, config.TOP_K)
+    hits = _search_stores(stores, qvec, config.TOP_K, docs=doc_filter)
     docs = {c.doc for c, _ in hits}
     dbg = [f"{s:0.3f}  {c.doc}  p.{c.page}  {' '.join(c.text.split())[:60]}"
            for c, s in hits]
-    tool("search", f"top_k={config.TOP_K}",
+    scope = f"{len(doc_filter)} doc(s)" if doc_filter is not None else "all docs"
+    tool("search", f"top_k={config.TOP_K}, scope={scope}",
          [f"{len(hits)} chunks from {len(docs)} doc(s)"], dbg, t0)
 
     # 3) collect distinct page images.
@@ -116,7 +186,7 @@ def handle_query(store: VectorStore, req: dict) -> None:
     def searcher(q: str, k: int) -> dict:
         ts = time.time()
         qv = embed_query(q)
-        hits = store.search(qv, k)
+        hits = _search_stores(stores, qv, k, docs=doc_filter)
         new_ctx, new_imgs, new_src = [], [], []
         for c, _ in hits:
             new_ctx.append({"doc": c.doc, "page": c.page, "text": c.text})
@@ -135,7 +205,7 @@ def handle_query(store: VectorStore, req: dict) -> None:
     # pager: fetch SPECIFIC pages by number (+ adjacent context). Resolves the page
     # image straight from disk, so it works even for figure-only pages that have no
     # text chunk — something semantic search can't reach.
-    known_docs = sorted({c.doc for c in store.chunks})
+    known_docs = doc_filter if doc_filter is not None else all_docs
 
     def _resolve_doc(name: str):
         name = (name or "").strip()
@@ -162,12 +232,13 @@ def handle_query(store: VectorStore, req: dict) -> None:
                     "note": f"No document named '{doc_req}'. Available documents: "
                             f"{', '.join(known_docs) or '(none)'}."}
         wanted = sorted({p + d for p in pages for d in range(-context, context + 1) if p + d >= 1})[:12]
-        sample = next((c for c in store.chunks if c.doc == doc), None)
+        sample = next((c for s in stores for c in s.chunks if c.doc == doc), None)
         subdir = os.path.dirname(sample.image_path) if sample else os.path.splitext(doc)[0].replace(" ", "_")
         by_page: dict = {}
-        for c in store.chunks:
-            if c.doc == doc and c.page in wanted:
-                by_page.setdefault(c.page, []).append((c.chunk_index, c.text))
+        for s in stores:
+            for c in s.chunks:
+                if c.doc == doc and c.page in wanted:
+                    by_page.setdefault(c.page, []).append((c.chunk_index, c.text))
         new_ctx, new_imgs, new_src = [], [], []
         for pg in wanted:
             img = config.resolve_image(f"{subdir}/p{pg:04d}.png")
@@ -355,8 +426,17 @@ def main(argv=None) -> int:
                 emit({"type": "ready", **_index_stats(store)})
             except Exception as e:  # noqa: BLE001
                 emit({"type": "error", "reqId": req.get("reqId"), "message": f"remove failed: {e}"})
+        elif kind == "temp_index_add":
+            try:
+                handle_temp_index(req)
+            except Exception as e:  # noqa: BLE001
+                emit({"type": "error", "reqId": req.get("reqId"), "message": f"temp index failed: {e}"})
+        elif kind == "temp_index_clone":
+            handle_temp_index_clone(req)
+        elif kind == "temp_index_clear":
+            handle_temp_index_clear(req)
         elif kind == "query":
-            if store is None:
+            if store is None and not TEMP_STORES.get(req.get("threadId")):
                 emit({"type": "error", "reqId": req.get("reqId"),
                       "message": "No index found. Add PDFs to build the index first."})
                 continue

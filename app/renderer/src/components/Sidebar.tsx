@@ -2,6 +2,8 @@ import React, { useState } from "react";
 import {
   store, activeThread, visibleThreads, newThread, selectThread, deleteThread,
   setSearchQuery, addPdfs, openDoc, showDocMenu, openSettings,
+  docEnabled, enabledDocs, setAllDocsEnabled, setDocEnabled, threadDocs,
+  installUpdate,
 } from "../store";
 
 function SearchIcon() {
@@ -73,6 +75,53 @@ function XIcon() {
   );
 }
 
+function DownloadIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+      <polyline points="7 10 12 15 17 10"></polyline>
+      <line x1="12" y1="15" x2="12" y2="3"></line>
+    </svg>
+  );
+}
+
+/** Shows download progress, then a "Restart to update" action once an update has
+ *  finished downloading in the background. Hidden when no update is pending. */
+function UpdateBanner() {
+  const u = store.update;
+  if (!u) return null;
+
+  if (u.status === "downloaded") {
+    return (
+      <button
+        className="mt-2 flex h-[34px] w-full items-center gap-2 rounded-lg border border-tint/40 bg-tint-soft px-2.5 text-[13px] font-medium text-tint-strong transition hover:bg-tint/15"
+        title={`Version ${u.version ?? ""} downloaded — restart to apply`}
+        onClick={() => installUpdate()}
+      >
+        <DownloadIcon />
+        <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">
+          Restart to update{u.version ? ` to ${u.version}` : ""}
+        </span>
+      </button>
+    );
+  }
+
+  if (u.status === "available" || u.status === "downloading") {
+    const pct = u.status === "downloading" && typeof u.percent === "number" ? ` ${u.percent}%` : "";
+    return (
+      <div
+        className="mt-2 flex h-[30px] w-full items-center gap-2 rounded-lg px-2.5 text-[12px] text-faint"
+        title="An update is downloading in the background"
+      >
+        <span className="h-[13px] w-[13px] shrink-0 animate-spin rounded-full border-2 border-border-strong border-t-tint" />
+        <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">Downloading update{pct}…</span>
+      </div>
+    );
+  }
+
+  return null;   // "error" — stay quiet in the sidebar (logged in main.log)
+}
+
 function SidebarSpinner() {
   return (
     <span
@@ -91,6 +140,9 @@ export function Sidebar() {
   const threads = visibleThreads();
   const searching = store.searchResults !== null;
   const working = !store.ready || !!store.ingest.text || !!activeThread()?.busy;
+  const docs = threadDocs();
+  const enabledCount = enabledDocs().length;
+  const allDocsEnabled = docs.length > 0 && enabledCount === docs.length;
 
   return (
     <aside className="relative z-30 flex min-h-0 w-[300px] min-w-[300px] shrink-0 flex-col border-r border-border bg-surface px-3 pb-3 pt-3">
@@ -144,8 +196,17 @@ export function Sidebar() {
           <ChevronIcon open={docsOpen} />
           <FolderIcon />
           <span className="overflow-hidden text-ellipsis whitespace-nowrap">Documents</span>
-          <span className="ml-auto text-[12px]">{store.docs.length}</span>
+          <span className="ml-auto text-[12px]">{enabledCount}/{docs.length}</span>
         </button>
+        {docs.length > 0 && (
+          <button
+            className={iconBtn}
+            title={allDocsEnabled ? "Disable all documents for this chat" : "Enable all documents for this chat"}
+            onClick={() => setAllDocsEnabled(!allDocsEnabled)}
+          >
+            <span className="font-mono text-[10px]">{allDocsEnabled ? "0" : "All"}</span>
+          </button>
+        )}
         <button
           className={iconBtn}
           title="Add PDFs to the index" onClick={() => void addPdfs()}
@@ -154,8 +215,10 @@ export function Sidebar() {
 
       {docsOpen && (
         <ul className="max-h-[26vh] list-none overflow-y-auto pr-1">
-          {store.docs.length === 0 && <li className="px-2.5 py-1.5 text-[12px] text-faint">No PDFs indexed</li>}
-          {store.docs.map((d) => (
+          {docs.length === 0 && <li className="px-2.5 py-1.5 text-[12px] text-faint">No PDFs indexed</li>}
+          {docs.map((d) => {
+            const isTemp = !!activeThread()?.tempDocs?.includes(d);
+            return (
             <li
               key={d}
               className="flex h-[27px] cursor-default items-center gap-1.5 overflow-hidden text-ellipsis whitespace-nowrap rounded-md px-2 text-[12.5px] text-muted transition-colors hover:bg-bg hover:text-ink"
@@ -163,10 +226,23 @@ export function Sidebar() {
               onDoubleClick={() => openDoc(d)}
               onContextMenu={(e) => { e.preventDefault(); showDocMenu(d); }}
             >
+              <input
+                type="checkbox"
+                className="h-[13px] w-[13px] shrink-0 accent-tint"
+                checked={docEnabled(d)}
+                title={docEnabled(d) ? "Searched in this chat" : "Ignored in this chat"}
+                onChange={(e) => setDocEnabled(d, e.target.checked)}
+                onClick={(e) => e.stopPropagation()}
+                onDoubleClick={(e) => e.stopPropagation()}
+              />
               <span className="shrink-0 text-faint"><FileIcon /></span>
-              <span className="overflow-hidden text-ellipsis whitespace-nowrap">{d.replace(/\.pdf$/i, "")}</span>
+              <span className={`overflow-hidden text-ellipsis whitespace-nowrap ${docEnabled(d) ? "" : "text-faint line-through decoration-border-strong"}`}>
+                {d.replace(/\.pdf$/i, "")}
+              </span>
+              {isTemp && <span className="ml-auto shrink-0 rounded bg-tint-soft px-1 font-mono text-[9.5px] text-tint-strong">chat</span>}
             </li>
-          ))}
+            );
+          })}
         </ul>
       )}
 
@@ -183,6 +259,8 @@ export function Sidebar() {
         {working && <SidebarSpinner />}
         <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{store.status}</span>
       </div>
+
+      <UpdateBanner />
 
       <button className="mt-2 flex h-[34px] items-center gap-2 rounded-lg px-2.5 text-[13.5px] text-ink transition hover:bg-bg" onClick={openSettings}>
         <SettingsIcon />

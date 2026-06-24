@@ -15,7 +15,8 @@ import * as fs from "fs";
 import { createIPCHandler } from "electron-trpc/main";
 import { readSettings, writeSettings, Settings } from "./settings";
 import { createAppRouter, RouterDeps } from "./trpc";
-import { checkForUpdates, initAutoUpdater } from "./updater";
+import { checkForUpdates, initAutoUpdater, installDownloadedUpdate, getUpdateState } from "./updater";
+import type { UpdateState } from "./trpc";
 import { APP_NAME } from "./branding";
 
 let win: BrowserWindow | null = null;
@@ -85,6 +86,18 @@ function log(level: "info" | "warn" | "error", msg: string, extra?: unknown): vo
   try { logStream?.write(line + "\n"); } catch { /* ignore */ }
 }
 
+async function openLogsAction(): Promise<void> {
+  const p = logFilePath();
+  if (!p) return;
+  openLog();
+  log("info", `open-logs ${p}`);
+  const err = await shell.openPath(p);
+  if (err) {
+    log("warn", `open-logs failed: ${err}`);
+    shell.showItemInFolder(p);
+  }
+}
+
 /** Compact, truncated preview of an IPC/protocol payload for the logs. */
 function preview(obj: unknown, max = 200): string {
   let s: string;
@@ -97,6 +110,49 @@ function preview(obj: unknown, max = 200): string {
 // Electron directory. Resolved lazily — app.getPath is only valid once ready.
 function dataDir(): string {
   return app.getPath("userData");
+}
+
+function cleanupTempThreadIndexes(): void {
+  try {
+    fs.rmSync(path.join(dataDir(), "temp-threads"), { recursive: true, force: true });
+  } catch (e) {
+    log("warn", "could not clean temp thread indexes", (e as Error).message);
+  }
+}
+
+function backupIfExists(filePath: string, stamp: string): void {
+  if (!fs.existsSync(filePath)) return;
+  const backup = `${filePath}.pre-migration-${stamp}`;
+  fs.renameSync(filePath, backup);
+  log("info", `backed up ${filePath} -> ${backup}`);
+}
+
+function copyLegacyDataIfNeeded(): void {
+  const current = dataDir();
+  const legacy = path.join(path.dirname(current), "pdf-qa-desktop");
+  if (!fs.existsSync(legacy) || legacy === current) return;
+
+  const currentStore = path.join(current, "index", "store.npy");
+  const legacyStore = path.join(legacy, "index", "store.npy");
+  if (fs.existsSync(currentStore) || !fs.existsSync(legacyStore)) return;
+
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  log("info", `migrating legacy app data from ${legacy} to ${current}`);
+
+  fs.mkdirSync(current, { recursive: true });
+  const currentIndex = path.join(current, "index");
+  if (fs.existsSync(currentIndex)) {
+    fs.renameSync(currentIndex, `${currentIndex}.pre-migration-${stamp}`);
+  }
+  fs.cpSync(path.join(legacy, "index"), currentIndex, { recursive: true });
+
+  for (const name of ["threads.db", "settings.json", "docpaths.json"]) {
+    const src = path.join(legacy, name);
+    const dst = path.join(current, name);
+    if (!fs.existsSync(src)) continue;
+    backupIfExists(dst, stamp);
+    fs.copyFileSync(src, dst);
+  }
 }
 
 // --- document source paths --------------------------------------------------
@@ -284,6 +340,8 @@ function installApplicationMenu(): void {
         { label: "Check for Updates…", click: () => { void checkForUpdates(true); } },
         { type: "separator" },
         { label: "Settings…", accelerator: "CommandOrControl+,", click: () => dispatchRendererEvent("pdf-qa-open-settings") },
+        { label: "Open Logs", click: () => { void openLogsAction(); } },
+        { label: "Clear File Index…", click: () => { void clearFileIndexAction(); } },
         { type: "separator" },
         { role: "services" },
         { type: "separator" },
@@ -303,6 +361,8 @@ function installApplicationMenu(): void {
           { label: "Check for Updates…", click: () => { void checkForUpdates(true); } } as MenuItemConstructorOptions,
           { type: "separator" } as MenuItemConstructorOptions,
           { label: "Settings…", accelerator: "CommandOrControl+,", click: () => dispatchRendererEvent("pdf-qa-open-settings") } as MenuItemConstructorOptions,
+          { label: "Open Logs", click: () => { void openLogsAction(); } } as MenuItemConstructorOptions,
+          { label: "Clear File Index…", click: () => { void clearFileIndexAction(); } } as MenuItemConstructorOptions,
           { type: "separator" } as MenuItemConstructorOptions,
           { role: "quit" } as MenuItemConstructorOptions,
         ] : []),
@@ -385,6 +445,41 @@ async function removeDocAction(name: string): Promise<void> {
   sendToBackend({ type: "doc_remove", doc: name });
 }
 
+async function clearFileIndexAction(): Promise<void> {
+  const opts = {
+    type: "warning" as const,
+    buttons: ["Cancel", "Clear Index"],
+    defaultId: 0,
+    cancelId: 0,
+    message: "Clear the file index?",
+    detail: "This removes indexed chunks and rendered page images. Your original PDF files and chats are not deleted.",
+  };
+  const res = win
+    ? await dialog.showMessageBox(win, opts)
+    : await dialog.showMessageBox(opts);
+  if (res.response !== 1) {
+    log("info", "clear-file-index canceled");
+    return;
+  }
+
+  const indexDir = path.join(dataDir(), "index");
+  log("info", `clear-file-index ${indexDir}`);
+  try {
+    fs.rmSync(indexDir, { recursive: true, force: true });
+    fs.rmSync(docPathsFile(), { force: true });
+    restartBackend();
+  } catch (e) {
+    log("error", "clear-file-index failed", (e as Error).message);
+    if (win) {
+      await dialog.showMessageBox(win, {
+        type: "error",
+        message: "Could not clear the file index.",
+        detail: (e as Error).message,
+      });
+    }
+  }
+}
+
 // Native right-click menu for a document in the sidebar.
 async function showDocMenuAction(name: string): Promise<void> {
   log("info", `doc-menu "${name}"`);
@@ -464,6 +559,61 @@ async function addPdfsAction(): Promise<{ canceled: boolean; count?: number }> {
   return { canceled: false, count: picked.filePaths.length };
 }
 
+async function addTempPdfsAction(input: { threadId: string; filePaths: string[] }): Promise<{ ok: boolean; docs: string[] }> {
+  const pdfs = input.filePaths
+    .filter((p) => path.extname(p).toLowerCase() === ".pdf")
+    .filter((p) => fs.existsSync(p));
+  if (!input.threadId || pdfs.length === 0) return { ok: false, docs: [] };
+
+  const safeThread = input.threadId.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const tempIndexDir = path.join(dataDir(), "temp-threads", safeThread, String(Date.now()));
+  fs.mkdirSync(tempIndexDir, { recursive: true });
+  log("info", `temp-pdfs: thread=${input.threadId} files=${pdfs.length}`, preview(pdfs, 400));
+
+  const docs = new Set<string>();
+  await new Promise<void>((resolve) => {
+    const { cmd, args, cwd } = backendCommand("ingest", ["--add", ...pdfs, "--json", "--force"]);
+    const proc = spawn(cmd, args, {
+      cwd,
+      env: { ...backendEnv(), INDEX_DIR: tempIndexDir },
+      windowsHide: true,
+    });
+    log("info", `temp ingest pid=${proc.pid ?? "?"}`);
+    const rl = readline.createInterface({ input: proc.stdout });
+    rl.on("line", (line) => {
+      line = line.trim();
+      if (!line) return;
+      try {
+        const ev = JSON.parse(line);
+        if (ev?.type === "file_done" && ev.name) docs.add(ev.name);
+        log("info", `temp ingest event: ${ev?.type ?? "?"}`, preview(ev));
+        emitIngest({ ...ev, temp: true, threadId: input.threadId });
+      } catch {
+        emitLog(line);
+      }
+    });
+    let err = "";
+    proc.stderr.on("data", (d: Buffer) => { err = (err + d.toString()).slice(-1500); log("warn", "temp ingest stderr", preview(d.toString(), 500)); });
+    proc.on("error", (e) => {
+      log("error", "temp ingest spawn error", e.message);
+      emitIngest({ type: "ingest_error", temp: true, threadId: input.threadId, message: e.message });
+    });
+    proc.on("close", (code) => {
+      log(code === 0 ? "info" : "warn", `temp ingest exited (code ${code ?? "?"})`);
+      if (code !== 0) {
+        emitIngest({
+          type: "ingest_error", temp: true, threadId: input.threadId,
+          message: err.trim().split("\n").slice(-2).join(" ") || `exit ${code}`,
+        });
+      } else if (docs.size > 0) {
+        sendToBackend({ type: "temp_index_add", threadId: input.threadId, prefix: path.join(tempIndexDir, "store") });
+      }
+      resolve();
+    });
+  });
+  return { ok: docs.size > 0, docs: [...docs].sort() };
+}
+
 function readRendererFile(rel: string): string {
   try { return fs.readFileSync(path.join(__dirname, "..", "renderer", rel), "utf-8"); }
   catch { return ""; }
@@ -511,17 +661,22 @@ const routerDeps: RouterDeps = {
   openDoc: openDocAction,
   removeDoc: removeDocAction,
   addPdfs: addPdfsAction,
+  addTempPdfs: addTempPdfsAction,
   exportPdf: exportPdfAction,
   showDocMenu: showDocMenuAction,
+  getUpdateState,
+  installUpdate: installDownloadedUpdate,
 };
 const appRouter = createAppRouter(routerDeps);
 
 app.whenReady().then(() => {
   openLog();
+  copyLegacyDataIfNeeded();
+  cleanupTempThreadIndexes();
   startBackend();
   installApplicationMenu();
   createWindow();
-  initAutoUpdater(() => win, log);
+  initAutoUpdater(() => win, log, (s: UpdateState) => bus.emit("update-event", s));
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

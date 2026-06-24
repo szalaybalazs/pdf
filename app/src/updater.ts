@@ -14,13 +14,48 @@
 import { app, dialog, BrowserWindow } from "electron";
 import { autoUpdater } from "electron-updater";
 import { APP_NAME } from "./branding";
+import type { UpdateState } from "./trpc";
 
 type Logger = (level: "info" | "warn" | "error", msg: string, extra?: unknown) => void;
+type EmitUpdate = (s: UpdateState) => void;
 
 let wired = false;
 let getAppWindow: (() => BrowserWindow | null) | null = null;
 let appLog: Logger | null = null;
 let checking = false;
+
+// Latest update state, mirrored to the renderer sidebar. Kept here so a renderer
+// that subscribes after a transition (e.g. window reload) can be replayed the
+// current state via getUpdateState().
+let updateState: UpdateState | null = null;
+let emitUpdate: EmitUpdate | null = null;
+
+function setUpdateState(s: UpdateState): void {
+  updateState = s;
+  emitUpdate?.(s);
+}
+
+/** Current auto-update state (for late renderer subscribers). */
+export function getUpdateState(): UpdateState | null {
+  return updateState;
+}
+
+/** Quit and install the already-downloaded update, then relaunch.
+ *  Returns false (no-op) in a dev build, true when the install is actually
+ *  triggered — the renderer uses this to confirm the click was wired through. */
+export function installDownloadedUpdate(): boolean {
+  const log = appLog ?? (() => undefined);
+  if (!app.isPackaged) {
+    // Dev build (e.g. previewing the banner via __fakeUpdate): nothing is staged,
+    // and quitAndInstall would throw. No-op so the click is harmless.
+    log("info", "auto-update: install requested in dev build — ignored (would restart in a packaged build)");
+    return false;
+  }
+  log("info", "auto-update: user requested install — quitting to apply");
+  // isSilent=false (show progress on Windows), isForceRunAfter=true (relaunch).
+  autoUpdater.quitAndInstall(false, true);
+  return true;
+}
 
 async function showUpdateMessage(opts: Electron.MessageBoxOptions): Promise<void> {
   const win = getAppWindow?.() ?? BrowserWindow.getFocusedWindow();
@@ -89,7 +124,7 @@ export async function checkForUpdates(manual = false): Promise<void> {
         buttons: ["OK"],
         title: APP_NAME,
         message: `Version ${info?.version ?? ""} is available.`,
-        detail: "The update is downloading in the background. You will be prompted when it is ready to install.",
+        detail: "The update is downloading in the background. A “Restart to update” option will appear in the sidebar when it is ready.",
       });
     }
   };
@@ -137,9 +172,10 @@ export async function checkForUpdates(manual = false): Promise<void> {
   }
 }
 
-export function initAutoUpdater(getWindow: () => BrowserWindow | null, log: Logger): void {
+export function initAutoUpdater(getWindow: () => BrowserWindow | null, log: Logger, emit: EmitUpdate): void {
   getAppWindow = getWindow;
   appLog = log;
+  emitUpdate = emit;
 
   if (!app.isPackaged) {
     log("info", "auto-update: skipped (not packaged)");
@@ -163,32 +199,27 @@ export function initAutoUpdater(getWindow: () => BrowserWindow | null, log: Logg
 
   autoUpdater.on("checking-for-update", () => log("info", "auto-update: checking for update"));
   autoUpdater.on("update-not-available", () => log("info", "auto-update: up to date"));
-  autoUpdater.on("update-available", (info) =>
-    log("info", `auto-update: update available ${info?.version ?? "?"} — downloading`));
-  autoUpdater.on("download-progress", (p) =>
-    log("info", `auto-update: downloading ${Math.round(p?.percent ?? 0)}%`));
-  autoUpdater.on("error", (err) =>
-    log("error", "auto-update: error", err?.message ?? String(err)));
+  autoUpdater.on("update-available", (info) => {
+    log("info", `auto-update: update available ${info?.version ?? "?"} — downloading`);
+    setUpdateState({ status: "available", version: info?.version });
+  });
+  autoUpdater.on("download-progress", (p) => {
+    const percent = Math.round(p?.percent ?? 0);
+    log("info", `auto-update: downloading ${percent}%`);
+    setUpdateState({ status: "downloading", percent, version: updateState?.version });
+  });
+  autoUpdater.on("error", (err) => {
+    log("error", "auto-update: error", err?.message ?? String(err));
+    setUpdateState({ status: "error", message: err?.message ?? String(err) });
+  });
 
-  autoUpdater.on("update-downloaded", async (info) => {
-    log("info", `auto-update: downloaded ${info?.version ?? "?"} — prompting to install`);
-    const win = getWindow();
-    const opts = {
-      type: "info" as const,
-      buttons: ["Restart now", "Later"],
-      defaultId: 0,
-      cancelId: 1,
-      title: APP_NAME,
-      message: `Version ${info?.version ?? ""} has been downloaded.`,
-      detail: "Restart the app to apply the update. It will also install automatically next time you quit.",
-    };
-    const res = win
-      ? await dialog.showMessageBox(win, opts)
-      : await dialog.showMessageBox(opts);
-    if (res.response === 0) {
-      // isSilent=false (show progress on Windows), isForceRunAfter=true (relaunch).
-      autoUpdater.quitAndInstall(false, true);
-    }
+  // Download finished: surface an in-app indicator instead of a native dialog.
+  // The renderer shows a "Restart to update" row in the sidebar that calls
+  // installUpdate() (-> installDownloadedUpdate). The update also installs on the
+  // next quit regardless (autoInstallOnAppQuit), so dismissing is non-destructive.
+  autoUpdater.on("update-downloaded", (info) => {
+    log("info", `auto-update: downloaded ${info?.version ?? "?"} — sidebar restart prompt shown`);
+    setUpdateState({ status: "downloaded", version: info?.version });
   });
 
   // Don't block startup — check shortly after the window is up.

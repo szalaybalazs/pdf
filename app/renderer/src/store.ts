@@ -7,6 +7,7 @@
  */
 import { useSyncExternalStore } from "react";
 import { api } from "./trpc";
+import type { UpdateState } from "./trpc";
 import type {
   Thread, AssistantMsg, ModelOption, Source, Usage,
   ServeEvent, ReadyEvent, BackendError, ThreadsEvent,
@@ -51,6 +52,7 @@ interface State {
   tokens: SessionTokens;
   settingsOpen: boolean;
   ready: boolean;
+  update: UpdateState | null;   // auto-update state; drives the sidebar restart indicator
 }
 
 export const store: State = {
@@ -70,6 +72,7 @@ export const store: State = {
   tokens: { prompt: 0, completion: 0, total: 0, queries: 0 },
   settingsOpen: false,
   ready: false,
+  update: null,
 };
 
 const reqToThread = new Map<string, string>();
@@ -86,9 +89,35 @@ export function visibleThreads(): Thread[] {
     .filter((t): t is Thread => !!t);
 }
 
+export function threadDocs(t = activeThread()): string[] {
+  const seen = new Set<string>();
+  return [...store.docs, ...(t?.tempDocs || [])].filter((d) => {
+    if (seen.has(d)) return false;
+    seen.add(d);
+    return true;
+  });
+}
+
+export function enabledDocs(t = activeThread()): string[] {
+  const disabled = new Set(t?.disabledDocs || []);
+  return threadDocs(t).filter((d) => !disabled.has(d));
+}
+
+export function docEnabled(name: string, t = activeThread()): boolean {
+  return !new Set(t?.disabledDocs || []).has(name);
+}
+
 function persistThread(t: Thread | undefined): void {
   if (!t) return;
-  api.sendRequest({ type: "thread_upsert", thread: { ...t, busy: false } });
+  const { tempDocs: _tempDocs, ...persisted } = t;
+  api.sendRequest({
+    type: "thread_upsert",
+    thread: {
+      ...persisted,
+      disabledDocs: (t.disabledDocs || []).filter((d) => store.docs.includes(d)),
+      busy: false,
+    },
+  });
 }
 
 function lastUserText(t: Thread): string {
@@ -101,7 +130,10 @@ function lastUserText(t: Thread): string {
 
 // ---- thread actions --------------------------------------------------------
 export function newThread(): Thread {
-  const t: Thread = { id: uid(), title: "New thread", messages: [], history: [], busy: false };
+  const t: Thread = {
+    id: uid(), title: "New thread", messages: [], history: [],
+    disabledDocs: [], tempDocs: [], busy: false,
+  };
   store.threads.unshift(t);
   store.activeId = t.id;
   store.searchResults = null;
@@ -119,6 +151,7 @@ export function selectThread(id: string): void {
 export function deleteThread(id: string): void {
   const i = store.threads.findIndex((t) => t.id === id);
   if (i < 0) return;
+  api.sendRequest({ type: "temp_index_clear", threadId: id });
   store.threads.splice(i, 1);
   api.sendRequest({ type: "thread_delete", id });
   if (store.activeId === id) store.activeId = store.threads[0]?.id || "";
@@ -134,11 +167,52 @@ export function setModel(id: string): void {
   bump();
 }
 
+export function setDocEnabled(name: string, enabled: boolean): void {
+  const t = activeThread();
+  if (!t) return;
+  const disabled = new Set(t.disabledDocs || []);
+  if (enabled) disabled.delete(name);
+  else disabled.add(name);
+  const docs = new Set(threadDocs(t));
+  t.disabledDocs = [...disabled].filter((d) => docs.has(d));
+  bump();
+  persistThread(t);
+}
+
+export function setAllDocsEnabled(enabled: boolean): void {
+  const t = activeThread();
+  if (!t) return;
+  t.disabledDocs = enabled ? [] : [...threadDocs(t)];
+  bump();
+  persistThread(t);
+}
+
+export async function addTempPdfsToThread(filePaths: string[]): Promise<void> {
+  const t = activeThread();
+  const pdfs = filePaths.filter((p) => /\.pdf$/i.test(p));
+  if (!t || pdfs.length === 0) return;
+  store.ingest = { text: `Adding ${pdfs.length} file(s) to this chat...`, percent: null };
+  bump();
+  try {
+    const r = await api.addTempPdfs(t.id, pdfs);
+    if (!r.ok) {
+      store.ingest = { text: "No PDFs were added to this chat.", percent: null };
+      bump();
+      setTimeout(() => { store.ingest = { text: "", percent: null }; bump(); }, 3000);
+    }
+  } catch (e) {
+    store.ingest = { text: `Could not add PDF: ${String((e as Error)?.message || e)}`, percent: null };
+    bump();
+  }
+}
+
 // ---- sending ---------------------------------------------------------------
 export function send(question: string): void {
   const t = activeThread();
   question = question.trim();
   if (!t || !question || t.busy) return;
+  const docs = enabledDocs(t);
+  if (threadDocs(t).length > 0 && docs.length === 0) return;
 
   const reqId = uid();
   t.messages.push({ kind: "user", text: question });
@@ -148,7 +222,7 @@ export function send(question: string): void {
 
   api.sendRequest({
     type: "query", reqId, question, history: t.history,
-    debug: store.debug, model: store.selectedModel,
+    debug: store.debug, model: store.selectedModel, docs,
   });
   bump();
   persistThread(t);
@@ -190,12 +264,18 @@ export function threadOff(reqId: string): void {
   const slice = (typeof structuredClone === "function"
     ? structuredClone(t.messages.slice(0, ai + 1))
     : JSON.parse(JSON.stringify(t.messages.slice(0, ai + 1)))) as typeof t.messages;
-  const nt: Thread = { id: uid(), title: `${t.title} ↳ branch`, messages: slice, history: [], busy: false };
+  const nt: Thread = {
+    id: uid(), title: `${t.title} ↳ branch`, messages: slice, history: [],
+    disabledDocs: [...(t.disabledDocs || [])], tempDocs: [...(t.tempDocs || [])], busy: false,
+  };
   rebuildHistory(nt);
   store.threads.unshift(nt);
   store.activeId = nt.id;
   store.searchResults = null;
   store.searchQuery = "";
+  if ((t.tempDocs || []).length > 0) {
+    api.sendRequest({ type: "temp_index_clone", fromThreadId: t.id, toThreadId: nt.id });
+  }
   bump();
   persistThread(nt);
 }
@@ -240,6 +320,22 @@ export function removeDoc(name: string): void {
 export function openSettings(): void { store.settingsOpen = true; bump(); }
 export function closeSettings(): void { store.settingsOpen = false; bump(); }
 
+// ---- auto-update -----------------------------------------------------------
+// The main process downloads updates in the background and pushes state here;
+// the sidebar shows a "Restart to update" row once status === "downloaded".
+export function handleUpdateEvent(s: UpdateState | null): void {
+  store.update = s;
+  bump();
+}
+
+export function installUpdate(): void {
+  void api.installUpdate()
+    .then((triggered) => {
+      console.log(`[update] install requested → ${triggered ? "restarting to apply" : "no-op (dev build; would restart when packaged)"}`);
+    })
+    .catch((e) => console.error("[update] install", e));
+}
+
 // ---- model picker / token stats -------------------------------------------
 function applyModels(models: ModelOption[], defaultId: string): void {
   if (!models.length) return;
@@ -262,6 +358,12 @@ function hydrateThreads(dumped: Thread[]): void {
   store.threads = [];
   for (const t of dumped) {
     t.busy = false;
+    if (store.docs.length) {
+      t.disabledDocs = (t.disabledDocs || []).filter((d) => store.docs.includes(d));
+    } else {
+      t.disabledDocs = t.disabledDocs || [];
+    }
+    t.tempDocs = [];
     for (const m of t.messages) {
       if (m.kind === "assistant") {
         m.streaming = false;
@@ -296,6 +398,9 @@ export function handleServeEvent(ev: ServeEvent): void {
     store.statusErr = false;
     store.status = `${r.chunks} chunks · ${r.docs.length} document(s)`;
     store.docs = r.docs;
+    for (const t of store.threads) {
+      t.disabledDocs = (t.disabledDocs || []).filter((d) => r.docs.includes(d));
+    }
     store.ready = true;
     bump();
     return;
@@ -317,6 +422,18 @@ export function handleServeEvent(ev: ServeEvent): void {
     const e = ev as ThreadTitleEvent;
     const t = store.threads.find((x) => x.id === e.id);
     if (t) { t.title = e.title; bump(); persistThread(t); }
+    return;
+  }
+  if (ev.type === "temp_indexed") {
+    const e = ev as any;
+    const t = store.threads.find((x) => x.id === e.threadId);
+    if (t) {
+      const docs = new Set([...(t.tempDocs || []), ...((e.docs || []) as string[])]);
+      t.tempDocs = [...docs];
+      store.ingest = { text: `Added ${e.docs?.length || 0} temporary document(s) to this chat.`, percent: null };
+      bump();
+      setTimeout(() => { store.ingest = { text: "", percent: null }; bump(); }, 3000);
+    }
     return;
   }
   if (ev.type === "error" && !(ev as BackendError).reqId) {
@@ -373,8 +490,10 @@ export function handleServeEvent(ev: ServeEvent): void {
 
 export function handleIngestEvent(ev: any): void {
   const set = (text: string, percent: number | null) => { store.ingest = { text, percent }; };
+  const temp = !!ev.temp;
+  const scope = temp ? "this chat" : "the index";
   switch (ev.type) {
-    case "ingest_start": set(`Ingesting ${ev.total} file(s)…`, null); break;
+    case "ingest_start": set(`Ingesting ${ev.total} file(s) for ${scope}…`, null); break;
     case "file_start": set(`Indexing ${ev.name} (${ev.index}/${ev.total})…`, 0); break;
     case "file_progress": {
       const label = ev.phase === "embed"
@@ -388,7 +507,7 @@ export function handleIngestEvent(ev: any): void {
     case "file_error": set(`${ev.name}: ${ev.message}`, null); break;
     case "ingest_done":
       set(ev.added ? `Added ${ev.added} document(s).` : "Nothing new to add.", null);
-      if (Array.isArray(ev.docs)) store.docs = ev.docs;
+      if (!temp && Array.isArray(ev.docs)) store.docs = ev.docs;
       setTimeout(() => { store.ingest = { text: "", percent: null }; bump(); }, 4000);
       break;
     case "ingest_error": set(`${ev.message}`, null); break;

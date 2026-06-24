@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; img-src 'self' data: file:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-eval'; font-src 'self' data:;" />
+  <title>pdf_qa</title>
+  <link rel="stylesheet" href="./vendor/katex/katex.min.css" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="sidebar-head">
+        <span class="logo">pdf_qa</span>
+        <button id="new-thread" title="New thread">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+        </button>
+      </div>
+      <ul id="thread-list" class="thread-list"></ul>
+
+      <div class="docs-head">
+        <span>Documents (<span id="doc-count">0</span>)</span>
+        <button id="add-pdf" title="Add PDFs to the index">＋ PDF</button>
+      </div>
+      <ul id="doc-list" class="doc-list"></ul>
+      <div id="ingest-status" class="ingest-status"></div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div id="index-status" class="status">connecting to backend…</div>
+        <div class="topbar-right">
+          <span id="token-stats" class="token-stats" title="Tokens used this session"></span>
+          <select id="model-select" class="model-select" title="Answer model"></select>
+          <label class="debug-toggle">
+            <input type="checkbox" id="debug-toggle" /> debug
+          </label>
+        </div>
+      </header>
+
+      <section id="messages" class="messages"></section>
+
+      <footer class="composer">
+        <div class="composer-inner">
+          <textarea id="input" rows="1" placeholder="Message pdf_qa..."></textarea>
+          <button id="send">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>
+          </button>
+        </div>
+        <div class="composer-footer">pdf_qa can make mistakes. Consider verifying important information.</div>
+      </footer>
+    </main>
+  </div>
+
+  <script src="./vendor/katex/katex.min.js"></script>
+  <script src="./vendor/mermaid.min.js"></script>
+  <script type="module" src="../dist/renderer.js"></script>
+</body>
+</html>

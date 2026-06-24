@@ -1,0 +1,10 @@
+PyMuPDF>=1.24.0
+openai>=1.30.0
+anthropic>=0.40.0     # Claude (Opus) answerer; selectable in the UI alongside OpenAI
+numpy>=1.24.0
+Pillow>=10.0.0
+tqdm>=4.66.0
+python-dotenv>=1.0.0
+pytesseract>=0.3.10   # OCR fallback; also requires the Tesseract binary (brew/apt install tesseract)
+sympy>=1.12           # exact arithmetic for the calculate tool
+pint>=0.23            # unit-aware calculations

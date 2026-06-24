@@ -1,0 +1,23 @@
+{
+  "name": "pdf-qa-desktop",
+  "version": "0.1.0",
+  "description": "Electron desktop shell for the pdf_qa multimodal chat (spawns the Python backend).",
+  "main": "dist/main.js",
+  "scripts": {
+    "build:main": "tsc -p tsconfig.main.json",
+    "build:renderer": "tsc -p tsconfig.renderer.json",
+    "build": "npm run build:main && npm run build:renderer",
+    "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.renderer.json --noEmit",
+    "start": "npm run build && electron .",
+    "dev": "npm run build && electron . --enable-logging"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "electron": "^30.0.0",
+    "jsdom": "^29.1.1",
+    "typescript": "^5.4.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["electron"]
+  }
+}

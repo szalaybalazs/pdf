@@ -9,13 +9,22 @@ import { app, BrowserWindow, ipcMain, shell, dialog } from "electron";
 import { spawn, ChildProcessWithoutNullStreams } from "child_process";
 import * as readline from "readline";
 import * as path from "path";
+import * as fs from "fs";
+import { readSettings, writeSettings, Settings } from "./settings";
 
 let win: BrowserWindow | null = null;
 let serve: ChildProcessWithoutNullStreams | null = null;
+let restarting = false;  // set while we intentionally kill+respawn the backend
 
 // project root = parent of the app/ directory (dist/ -> app/ -> project/)
 const PROJECT_ROOT = path.resolve(__dirname, "..", "..");
 const PYTHON = process.env.PDF_QA_PYTHON || "python3";
+
+// All app data (PDF index, page renders, threads.db) lives under the per-user
+// Electron directory. Resolved lazily — app.getPath is only valid once ready.
+function dataDir(): string {
+  return app.getPath("userData");
+}
 
 // The backend emits its "ready" event within milliseconds of spawning — often
 // before the renderer has loaded and subscribed. Buffer everything until the
@@ -38,10 +47,27 @@ function flushPending(): void {
   pending.length = 0;
 }
 
+function backendEnv(): NodeJS.ProcessEnv {
+  const DATA_DIR = dataDir();
+  const INDEX_DIR = path.join(DATA_DIR, "index");
+  fs.mkdirSync(INDEX_DIR, { recursive: true });
+  const settings = readSettings();
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    PDF_QA_DATA_DIR: DATA_DIR,
+    INDEX_DIR,
+  };
+  // Keys set in the settings page take precedence over any inherited / .env value.
+  if (settings.openaiKey) env.OPENAI_API_KEY = settings.openaiKey;
+  if (settings.anthropicKey) env.ANTHROPIC_API_KEY = settings.anthropicKey;
+  if (settings.openrouterKey) env.OPENROUTER_API_KEY = settings.openrouterKey;
+  return env;
+}
+
 function startBackend(): void {
   serve = spawn(PYTHON, ["-u", "-m", "pdf_qa.serve"], {
     cwd: PROJECT_ROOT,
-    env: { ...process.env },
+    env: backendEnv(),
   });
 
   let sawBackendError = false;
@@ -80,6 +106,7 @@ function startBackend(): void {
   });
 
   serve.on("exit", (code: number | null) => {
+    if (restarting) { restarting = false; return; } // intentional restart (e.g. after settings change)
     if (code === 0 || sawBackendError) return; // clean exit, or a specific error was already shown
     // Surface the real reason from Python's stderr (e.g. ModuleNotFoundError, traceback).
     const reason = stderrTail.trim().split("\n").filter(Boolean).slice(-3).join(" · ");
@@ -111,11 +138,33 @@ function createWindow(): void {
   win.webContents.on("did-finish-load", flushPending);
 }
 
+function restartBackend(): void {
+  if (serve) {
+    restarting = true;
+    serve.kill();
+  }
+  startBackend();
+}
+
 // --- IPC: renderer -> main --------------------------------------------------
 ipcMain.on("serve-request", (_e, req: unknown) => {
   if (serve && serve.stdin.writable) {
     serve.stdin.write(JSON.stringify(req) + "\n");
   }
+});
+
+ipcMain.handle("get-settings", async () => {
+  return { ...readSettings(), dataDir: dataDir() };
+});
+
+ipcMain.handle("set-settings", async (_e, s: Settings) => {
+  writeSettings({
+    openaiKey: s.openaiKey || "",
+    anthropicKey: s.anthropicKey || "",
+    openrouterKey: s.openrouterKey || "",
+  });
+  restartBackend(); // respawn so the Python backend picks up the new keys
+  return { ok: true };
 });
 
 ipcMain.handle("open-figure", async (_e, filePath: string) => {
@@ -135,7 +184,7 @@ ipcMain.handle("add-pdfs", async () => {
 
   await new Promise<void>((resolve) => {
     const proc = spawn(PYTHON, ["-u", "-m", "pdf_qa.ingest", "--add", ...picked.filePaths, "--json"],
-      { cwd: PROJECT_ROOT, env: { ...process.env } });
+      { cwd: PROJECT_ROOT, env: backendEnv() });
     const rl = readline.createInterface({ input: proc.stdout });
     rl.on("line", (line) => {
       line = line.trim();

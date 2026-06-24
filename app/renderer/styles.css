@@ -40,13 +40,23 @@ body { background: var(--bg); color: var(--text); font-family: var(--sans); -web
   padding: 8px 12px; margin-bottom: 12px;
 }
 .logo { font-weight: 600; color: var(--text); font-size: 16px; }
-#new-thread {
+.head-actions { display: flex; align-items: center; gap: 2px; }
+#new-thread, #open-settings {
   background: transparent; color: var(--text); border: none;
   width: 32px; height: 32px; font-size: 20px; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
   border-radius: 6px; transition: background 0.2s;
 }
-#new-thread:hover { background: var(--panel-2); }
+#new-thread:hover, #open-settings:hover { background: var(--panel-2); }
+#open-settings { color: var(--muted); }
+.thread-search {
+  width: 100%; box-sizing: border-box; margin: 0 0 10px; padding: 8px 12px;
+  font-family: var(--sans); font-size: 13px; color: var(--text);
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px; outline: none;
+}
+.thread-search:focus { border-color: var(--border-strong); }
+.thread-search::placeholder { color: var(--faint); }
+.thread-empty { padding: 10px 12px; color: var(--faint); font-size: 13px; }
 .thread-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; }
 .thread-item {
   padding: 10px 12px; border-radius: 8px; cursor: pointer; color: var(--text);
@@ -235,3 +245,36 @@ body { background: var(--bg); color: var(--text); font-family: var(--sans); -web
 }
 .empty-hint { text-align: center; color: var(--muted); margin-top: 20vh; font-size: 24px; font-weight: 600; line-height: 1.4; }
 .empty-hint-sub { font-size: 14px; font-weight: 400; margin-top: 12px; color: var(--faint); }
+
+/* --- settings modal --- */
+.modal-overlay {
+  display: none; position: fixed; inset: 0; z-index: 100;
+  background: rgba(0,0,0,0.35); align-items: center; justify-content: center;
+}
+.modal-overlay.open { display: flex; }
+.modal {
+  width: 460px; max-width: calc(100vw - 48px);
+  background: var(--bg); border: 1px solid var(--border-strong); border-radius: 12px;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.18); padding: 24px;
+  display: flex; flex-direction: column;
+}
+.modal-head { font-size: 18px; font-weight: 600; color: var(--text); margin-bottom: 16px; }
+.modal-label { font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
+.modal-input {
+  width: 100%; box-sizing: border-box; padding: 9px 12px;
+  font-family: var(--mono); font-size: 13px; color: var(--text);
+  background: var(--panel); border: 1px solid var(--border-strong); border-radius: 8px; outline: none;
+}
+.modal-input:focus { border-color: var(--text); }
+.modal-hint { font-size: 11px; color: var(--faint); margin-top: 6px; line-height: 1.4; }
+.modal-note { font-size: 12px; color: var(--faint); margin-top: 16px; }
+.modal-path { font-family: var(--mono); font-size: 11px; color: var(--muted); word-break: break-all; margin-top: 2px; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+.modal-btn {
+  padding: 8px 16px; font-size: 13px; cursor: pointer; border-radius: 8px;
+  border: 1px solid var(--border-strong); background: var(--bg); color: var(--text);
+}
+.modal-btn:hover { background: var(--panel-2); }
+.modal-btn.primary { background: var(--text); color: var(--bg); border-color: var(--text); }
+.modal-btn.primary:hover { opacity: 0.85; }
+.modal-btn:disabled { opacity: 0.5; cursor: default; }

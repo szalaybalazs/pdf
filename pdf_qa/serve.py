@@ -27,6 +27,7 @@ import time
 
 from . import config
 from .store import VectorStore
+from .threads import ThreadStore
 
 
 def emit(obj: dict) -> None:
@@ -34,11 +35,11 @@ def emit(obj: dict) -> None:
     sys.stdout.flush()
 
 
-def _index_stats(store: VectorStore) -> dict:
-    docs = sorted({c.doc for c in store.chunks})
+def _index_stats(store: VectorStore | None) -> dict:
+    docs = sorted({c.doc for c in store.chunks}) if store else []
     models = [{"id": mid, "label": spec["label"]} for mid, spec in config.MODELS.items()]
-    return {"docs": docs, "chunks": len(store), "vision_model": config.VISION_MODEL,
-            "embed_model": config.EMBED_MODEL,
+    return {"docs": docs, "chunks": len(store) if store else 0,
+            "vision_model": config.VISION_MODEL, "embed_model": config.EMBED_MODEL,
             "models": models, "default_model": config.DEFAULT_MODEL}
 
 
@@ -51,7 +52,7 @@ def handle_query(store: VectorStore, req: dict) -> None:
     debug = bool(req.get("debug"))
     model_id = req.get("model")
     model_spec = config.resolve_model(model_id)
-    model_name = model_spec["model"]
+    model_name = model_spec["openrouter"] if config.USE_OPENROUTER else model_spec["model"]
 
     def tool(name, args, detail, debug_lines, t0):
         emit({"type": "tool", "reqId": rid, "name": name, "args": args,
@@ -78,10 +79,11 @@ def handle_query(store: VectorStore, req: dict) -> None:
     contexts = [{"doc": c.doc, "page": c.page, "text": c.text} for c, _ in hits]
     images, seen, sources = [], set(), []
     for c, _ in hits:
-        if c.image_path not in seen:
-            seen.add(c.image_path)
-            images.append(c.image_path)
-            sources.append({"doc": c.doc, "page": c.page, "image": c.image_path})
+        img = config.resolve_image(c.image_path)   # stored paths are PAGES_DIR-relative
+        if img not in seen:
+            seen.add(img)
+            images.append(img)
+            sources.append({"doc": c.doc, "page": c.page, "image": img})
         if len(images) >= config.MAX_IMAGES:
             break
     dbg = [f"{os.path.basename(p)}  ({_img_dims(p)})" for p in images]
@@ -126,12 +128,54 @@ def _img_dims(path: str) -> str:
         return "?"
 
 
+# --- thread persistence + search -------------------------------------------
+
+def _thread_embed_text(question: str, answer: str, title: str) -> str:
+    return f"{title}\n\n{question}\n\n{answer}"[:4000]
+
+
+def handle_threads(tstore: ThreadStore, req: dict) -> None:
+    """Handle thread CRUD / search / title requests. Errors are reported but
+    never crash the server loop."""
+    from .llm import embed_query, summarize_title
+
+    kind = req["type"]
+    if kind == "threads_dump":
+        emit({"type": "threads", "threads": tstore.dump()})
+    elif kind == "thread_upsert":
+        thread = req.get("thread")
+        if isinstance(thread, dict):
+            tstore.upsert(thread)
+    elif kind == "thread_delete":
+        if req.get("id"):
+            tstore.delete(req["id"])
+    elif kind == "thread_search":
+        q = (req.get("q") or "").strip()
+        results = tstore.search(embed_query(q), int(req.get("k", 20))) if q else []
+        emit({"type": "thread_results", "q": q, "results": results})
+    elif kind == "title_suggest":
+        tid = req.get("id")
+        question = req.get("question") or ""
+        answer = req.get("answer") or ""
+        if not tid:
+            return
+        title = summarize_title(question, answer)
+        if not title:
+            return
+        tstore.set_title(tid, title)
+        try:
+            tstore.set_embedding(tid, embed_query(_thread_embed_text(question, answer, title)))
+        except Exception:  # embedding is best-effort; title still updates
+            pass
+        emit({"type": "thread_title", "id": tid, "title": title})
+
+
 def main(argv=None) -> int:
+    tstore = ThreadStore(config.DB_PATH)
     try:
         store = VectorStore.load(config.STORE_PATH)
     except FileNotFoundError:
-        emit({"type": "error", "message": "No index found. Run ingest first."})
-        return 1
+        store = None  # no PDF index yet — threads/settings still work; queries error
 
     emit({"type": "ready", **_index_stats(store)})
 
@@ -157,8 +201,18 @@ def main(argv=None) -> int:
             except Exception as e:  # noqa: BLE001
                 emit({"type": "error", "message": f"reload failed: {e}"})
         elif kind == "query":
+            if store is None:
+                emit({"type": "error", "reqId": req.get("reqId"),
+                      "message": "No index found. Add PDFs to build the index first."})
+                continue
             try:
                 handle_query(store, req)
+            except Exception as e:  # report, keep serving
+                emit({"type": "error", "reqId": req.get("reqId"), "message": str(e)})
+        elif kind in ("threads_dump", "thread_upsert", "thread_delete",
+                      "thread_search", "title_suggest"):
+            try:
+                handle_threads(tstore, req)
             except Exception as e:  # report, keep serving
                 emit({"type": "error", "reqId": req.get("reqId"), "message": str(e)})
         else:

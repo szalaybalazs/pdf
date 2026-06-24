@@ -30,6 +30,29 @@ def _anthropic_client():
     return Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
 
+def _chat_client():
+    """OpenAI-compatible client for chat/vision/title calls. Routes through
+    OpenRouter when enabled, otherwise the direct OpenAI API. (Embeddings always
+    use the direct OpenAI client via _client() — OpenRouter has no embeddings.)"""
+    if config.USE_OPENROUTER:
+        from openai import OpenAI
+        if not config.OPENROUTER_API_KEY:
+            raise RuntimeError(
+                "OPENROUTER_API_KEY is not set. Add it in Settings or .env, or set "
+                "USE_OPENROUTER=false to use the providers directly."
+            )
+        return OpenAI(api_key=config.OPENROUTER_API_KEY, base_url=config.OPENROUTER_BASE_URL,
+                      default_headers={"HTTP-Referer": "https://github.com/pdf_qa",
+                                       "X-Title": "pdf_qa"})
+    return _client()
+
+
+def _chat_model_id(spec: dict) -> str:
+    """The model id to send on chat calls: OpenRouter slug when routing through
+    OpenRouter, else the provider-native id."""
+    return spec["openrouter"] if config.USE_OPENROUTER else spec["model"]
+
+
 def embed_texts(texts: list[str]) -> np.ndarray:
     """Embed a list of texts, batching to stay within request limits."""
     client = _client()
@@ -43,6 +66,33 @@ def embed_texts(texts: list[str]) -> np.ndarray:
 
 def embed_query(text: str) -> np.ndarray:
     return embed_texts([text])[0]
+
+
+_TITLE_SYSTEM = (
+    "You write a very short title for a chat conversation. Reply with 3 to 6 words, "
+    "Title Case, describing the topic. No quotes, no trailing punctuation, no prefix "
+    "like 'Title:'. Just the title."
+)
+
+
+def summarize_title(question: str, answer: str) -> str:
+    """Summarise the first exchange into a short thread title using the small,
+    cheap SUMMARY_MODEL. Best-effort: returns "" on any failure so the caller can
+    fall back to a placeholder."""
+    client = _chat_client()
+    model = f"openai/{config.SUMMARY_MODEL}" if config.USE_OPENROUTER else config.SUMMARY_MODEL
+    convo = f"User: {question.strip()[:800]}\n\nAssistant: {answer.strip()[:800]}"
+    try:
+        kw: dict = {"model": model, "max_tokens": 20,
+                    "messages": [{"role": "system", "content": _TITLE_SYSTEM},
+                                 {"role": "user", "content": convo}]}
+        if not _omits_temperature(model):
+            kw["temperature"] = 0.2
+        resp = client.chat.completions.create(**kw)
+        title = (resp.choices[0].message.content or "").strip().strip('"').strip()
+        return title[:60]
+    except Exception:
+        return ""
 
 
 def _image_jpeg_b64(path: str, max_dim: int) -> str:
@@ -156,10 +206,19 @@ def _usage_dict(usage) -> dict:
     return out
 
 
+def _omits_temperature(model: str) -> bool:
+    """Reasoning / frontier models (o-series, gpt-5.x) reject a custom temperature.
+    Tolerates OpenRouter slugs like 'openai/gpt-5.5' by checking the bare model."""
+    m = model.lower().split("/")[-1]
+    return m.startswith(("o1", "o3", "o4")) or m.startswith("gpt-5")
+
+
 def _chat_kwargs(model: str | None = None) -> dict:
-    """Shared chat-completion kwargs; temperature omitted when unset (for reasoning models)."""
-    kw: dict = {"model": model or config.VISION_MODEL}
-    if config.VISION_TEMPERATURE is not None:
+    """Shared chat-completion kwargs; temperature omitted when unset or when the
+    target model rejects it (reasoning / gpt-5.x models)."""
+    m = model or config.VISION_MODEL
+    kw: dict = {"model": m}
+    if config.VISION_TEMPERATURE is not None and not _omits_temperature(m):
         kw["temperature"] = config.VISION_TEMPERATURE
     return kw
 
@@ -221,13 +280,14 @@ def answer(question: str, contexts: list[dict], image_paths: list[str],
            history: list[dict] | None = None, think: bool = False) -> dict:
     """Non-streaming answer with the calculate tool loop (used by the CLI)."""
     import time
-    client = _client()
+    client = _chat_client()
+    model_id = _chat_model_id(config.resolve_model(config.DEFAULT_MODEL))
     messages = _build_messages(question, contexts, image_paths, history, think)
     t0 = time.time()
     calculations: list = []
     usage_tot = _new_usage()
     for _ in range(_MAX_TOOL_ROUNDS):
-        resp = client.chat.completions.create(messages=messages, tools=[CALC_TOOL], **_chat_kwargs())
+        resp = client.chat.completions.create(messages=messages, tools=[CALC_TOOL], **_chat_kwargs(model_id))
         _add_usage(usage_tot, getattr(resp, "usage", None))
         msg = resp.choices[0].message
         if msg.tool_calls:
@@ -240,10 +300,10 @@ def answer(question: str, contexts: list[dict], image_paths: list[str],
                 out = _run_calc(tc.function.name, tc.function.arguments, calculations)
                 messages.append({"role": "tool", "tool_call_id": tc.id, "content": out})
             continue
-        return {"text": msg.content, "model": config.VISION_MODEL,
+        return {"text": msg.content, "model": model_id,
                 "latency": time.time() - t0, "n_images": len(image_paths),
                 "usage": usage_tot, "calculations": calculations}
-    return {"text": "(calculation loop did not converge)", "model": config.VISION_MODEL,
+    return {"text": "(calculation loop did not converge)", "model": model_id,
             "latency": time.time() - t0, "n_images": len(image_paths),
             "usage": usage_tot, "calculations": calculations}
 
@@ -273,18 +333,20 @@ def answer_stream(question: str, contexts: list[dict], image_paths: list[str],
     each calculation, then {"type":"final","text","usage","calculations",...}.
     """
     spec = config.resolve_model(model)
-    if spec["provider"] == "anthropic":
+    # When OpenRouter is on, everything (incl. Claude) goes through the OpenAI-
+    # compatible path; otherwise Anthropic uses its native SDK path.
+    if not config.USE_OPENROUTER and spec["provider"] == "anthropic":
         yield from _answer_stream_anthropic(question, contexts, image_paths,
                                             history, think, spec["model"])
     else:
         yield from _answer_stream_openai(question, contexts, image_paths,
-                                         history, think, spec["model"])
+                                         history, think, _chat_model_id(spec))
 
 
 def _answer_stream_openai(question: str, contexts: list[dict], image_paths: list[str],
                           history: list[dict] | None, think: bool, model: str):
     import time
-    client = _client()
+    client = _chat_client()
     messages = _build_messages(question, contexts, image_paths, history, think)
     t0 = time.time()
     content_all: list = []

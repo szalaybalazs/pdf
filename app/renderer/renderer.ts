@@ -25,10 +25,16 @@ interface ReadyEvent {
   models?: ModelOption[]; default_model?: string;
 }
 interface BackendError { type: "error"; reqId?: string; message: string; }
-type ServeEvent = ToolEvent | AnswerEvent | ReadyEvent | BackendError | { type: string; reqId?: string };
+interface ThreadsEvent { type: "threads"; threads: Thread[]; }
+interface ThreadTitleEvent { type: "thread_title"; id: string; title: string; }
+interface ThreadResult { id: string; title: string; score: number; }
+interface ThreadResultsEvent { type: "thread_results"; q: string; results: ThreadResult[]; }
+type ServeEvent = ToolEvent | AnswerEvent | ReadyEvent | BackendError
+  | ThreadsEvent | ThreadTitleEvent | ThreadResultsEvent | { type: string; reqId?: string };
 export {}; // make this a module so the `Window` augmentation below is allowed
 
 // ---- the API exposed by preload.ts -----------------------------------------
+interface AppSettings { openaiKey: string; anthropicKey: string; openrouterKey: string; dataDir?: string; }
 declare global {
   interface Window {
     api: {
@@ -38,6 +44,8 @@ declare global {
       openFigure: (filePath: string) => Promise<string>;
       addPdfs: () => Promise<{ canceled: boolean; count?: number }>;
       onIngestEvent: (cb: (e: any) => void) => void;
+      getSettings: () => Promise<AppSettings>;
+      setSettings: (s: { openaiKey: string; anthropicKey: string; openrouterKey: string }) => Promise<{ ok: boolean }>;
     };
   }
 }
@@ -67,43 +75,38 @@ const reqToThread = new Map<string, string>();
 let debug = false;
 let visionModel = "gpt-4o";
 let selectedModel = localStorage.getItem("pdf_qa_model") || "";  // UI model id; "" until ready
+let searchResults: ThreadResult[] | null = null;  // null = show all threads; else search view
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 
-// ---- persistence (threads survive app restarts) ----------------------------
-const STORE_KEY = "pdf_qa_threads_v1";
-
-function saveState(): void {
-  try {
-    const data = JSON.stringify({
-      activeId,
-      // strip transient streaming buffers; keep durable content
-      threads: threads.map((t) => ({ ...t, busy: false })),
-    });
-    localStorage.setItem(STORE_KEY, data);
-  } catch { /* quota / serialization — ignore */ }
+// ---- persistence (threads live in the backend's SQLite store) --------------
+// One thread is upserted whenever its durable content changes; deletes are sent
+// explicitly. The renderer keeps the in-memory model as before — only the
+// storage layer moved from localStorage to the Python backend.
+function persistThread(t: Thread | undefined): void {
+  if (!t) return;
+  window.api.sendRequest({ type: "thread_upsert", thread: { ...t, busy: false } });
 }
 
-function loadState(): boolean {
-  try {
-    const raw = localStorage.getItem(STORE_KEY);
-    if (!raw) return false;
-    const data = JSON.parse(raw);
-    if (!Array.isArray(data.threads) || data.threads.length === 0) return false;
-    for (const t of data.threads as Thread[]) {
-      t.busy = false;
-      for (const m of t.messages) {
-        if (m.kind === "assistant") {
-          m.streaming = false;
-          if (!m.done) { m.done = true; if (!m.text && !m.error) m.error = "interrupted (app was closed)"; }
-        }
+/** Hydrate the in-memory thread list from a backend dump (boot). */
+function hydrateThreads(dumped: Thread[]): void {
+  threads.length = 0;
+  for (const t of dumped) {
+    t.busy = false;
+    for (const m of t.messages) {
+      if (m.kind === "assistant") {
+        m.streaming = false;
+        if (!m.done) { m.done = true; if (!m.text && !m.error) m.error = "interrupted (app was closed)"; }
       }
-      threads.push(t);
     }
-    activeId = threads.find((t) => t.id === data.activeId) ? data.activeId : threads[0].id;
-    return true;
-  } catch {
-    return false;
+    threads.push(t);
+  }
+  if (threads.length) {
+    activeId = threads.find((t) => t.id === activeId) ? activeId : threads[0].id;
+    renderThreads();
+    renderMessages();
+  } else {
+    newThread();
   }
 }
 
@@ -121,6 +124,15 @@ const docCountEl = $("doc-count");
 const docListEl = $("doc-list");
 const addPdfBtn = $("add-pdf") as HTMLButtonElement;
 const ingestStatusEl = $("ingest-status");
+const threadSearchEl = $("thread-search") as HTMLInputElement;
+const settingsBtn = $("open-settings") as HTMLButtonElement;
+const settingsModal = $("settings-modal");
+const settingsOpenAI = $("set-openai") as HTMLInputElement;
+const settingsAnthropic = $("set-anthropic") as HTMLInputElement;
+const settingsOpenRouter = $("set-openrouter") as HTMLInputElement;
+const settingsDataDir = $("set-datadir");
+const settingsSaveBtn = $("settings-save") as HTMLButtonElement;
+const settingsCancelBtn = $("settings-cancel") as HTMLButtonElement;
 
 /** Build the model picker from the backend's advertised model list. */
 function renderModelSelect(models: ModelOption[], defaultId: string): void {
@@ -193,9 +205,11 @@ function newThread(): Thread {
   const t: Thread = { id: uid(), title: "New thread", messages: [], history: [], busy: false };
   threads.unshift(t);
   activeId = t.id;
+  searchResults = null;            // a new thread exits any active search view
+  if (threadSearchEl) threadSearchEl.value = "";
   renderThreads();
   renderMessages();
-  saveState();
+  persistThread(t);
   return t;
 }
 
@@ -207,15 +221,31 @@ function deleteThread(id: string): void {
   const i = threads.findIndex((t) => t.id === id);
   if (i < 0) return;
   threads.splice(i, 1);
+  window.api.sendRequest({ type: "thread_delete", id });
   if (activeId === id) activeId = threads[0]?.id || "";
   if (!activeId) newThread();
   else { renderThreads(); renderMessages(); }
-  saveState();
+}
+
+/** The threads to show in the sidebar: search-ranked when searching, else all. */
+function visibleThreads(): Thread[] {
+  if (!searchResults) return threads;
+  return searchResults
+    .map((r) => threads.find((t) => t.id === r.id))
+    .filter((t): t is Thread => !!t);
 }
 
 function renderThreads(): void {
   threadList.innerHTML = "";
-  for (const t of threads) {
+  const list = visibleThreads();
+  if (searchResults && list.length === 0) {
+    const li = document.createElement("li");
+    li.className = "thread-empty";
+    li.textContent = "No matching chats";
+    threadList.appendChild(li);
+    return;
+  }
+  for (const t of list) {
     const li = document.createElement("li");
     li.className = "thread-item" + (t.id === activeId ? " active" : "");
     const label = document.createElement("span");
@@ -224,7 +254,7 @@ function renderThreads(): void {
     del.className = "del"; del.textContent = "✕";
     del.onclick = (e) => { e.stopPropagation(); deleteThread(t.id); };
     li.append(label, del);
-    li.onclick = () => { activeId = t.id; renderThreads(); renderMessages(); saveState(); };
+    li.onclick = () => { activeId = t.id; renderThreads(); renderMessages(); };
     threadList.appendChild(li);
   }
 }
@@ -440,7 +470,8 @@ function send(): void {
   const question = inputEl.value.trim();
   if (!t || !question || t.busy) return;
 
-  if (t.messages.length === 0) t.title = question.slice(0, 40);
+  // The label is set later by the AI summary (title_suggest) — keep the
+  // placeholder until the first answer comes back.
   const reqId = uid();
   t.messages.push({ kind: "user", text: question });
   t.messages.push({ kind: "assistant", reqId, trace: [], done: false });
@@ -454,7 +485,7 @@ function send(): void {
   setBusy(true);
   renderThreads();
   renderMessages();
-  saveState();
+  persistThread(t);
 }
 
 function setBusy(b: boolean): void {
@@ -482,6 +513,21 @@ window.api.onServeEvent((ev: ServeEvent) => {
     renderDocs(r.docs);
     return;
   }
+  if (ev.type === "threads") {                       // boot hydrate
+    hydrateThreads((ev as ThreadsEvent).threads || []);
+    return;
+  }
+  if (ev.type === "thread_results") {                // search response
+    searchResults = (ev as ThreadResultsEvent).results || [];
+    renderThreads();
+    return;
+  }
+  if (ev.type === "thread_title") {                  // AI-generated label arrived
+    const e = ev as ThreadTitleEvent;
+    const t = threads.find((x) => x.id === e.id);
+    if (t) { t.title = e.title; renderThreads(); persistThread(t); }
+    return;
+  }
   if (ev.type === "error" && !(ev as BackendError).reqId) {
     statusEl.classList.add("err");
     statusEl.textContent = (ev as BackendError).message;
@@ -505,15 +551,21 @@ window.api.onServeEvent((ev: ServeEvent) => {
     msg.sources = a.sources; msg.usage = a.usage; msg.calculations = a.calculations;
     msg.model = a.model; msg.streaming = false; msg.done = true;
     if (a.usage && a.usage.total) updateTokenStats(a.usage);
-    saveState();
-    thread.history.push({ role: "user", content: lastUserText(thread) });
+    const question = lastUserText(thread);
+    thread.history.push({ role: "user", content: question });
     thread.history.push({ role: "assistant", content: a.text });
     thread.history = thread.history.slice(-8);
     thread.busy = false;
+    persistThread(thread);
+    // After the first exchange, ask the backend to summarise the chat into a label.
+    if (thread.messages.filter((m) => m.kind === "user").length === 1) {
+      window.api.sendRequest({ type: "title_suggest", id: thread.id, question, answer: a.text });
+    }
     if (thread.id === activeId) setBusy(false);
   } else if (ev.type === "error") {
     msg.error = (ev as BackendError).message; msg.done = true;
     thread.busy = false;
+    persistThread(thread);
     if (thread.id === activeId) setBusy(false);
   }
   if (thread.id === activeId) renderMessages();
@@ -555,6 +607,49 @@ modelSelect.addEventListener("change", () => {
   localStorage.setItem("pdf_qa_model", selectedModel);
 });
 
+// ---- thread search (semantic, debounced) -----------------------------------
+let searchTimer: ReturnType<typeof setTimeout> | undefined;
+threadSearchEl.addEventListener("input", () => {
+  const q = threadSearchEl.value.trim();
+  clearTimeout(searchTimer);
+  if (!q) { searchResults = null; renderThreads(); return; }
+  searchTimer = setTimeout(() => {
+    window.api.sendRequest({ type: "thread_search", q });
+  }, 200);
+});
+
+// ---- settings modal --------------------------------------------------------
+async function openSettings(): Promise<void> {
+  try {
+    const s = await window.api.getSettings();
+    settingsOpenAI.value = s.openaiKey || "";
+    settingsAnthropic.value = s.anthropicKey || "";
+    settingsOpenRouter.value = s.openrouterKey || "";
+    settingsDataDir.textContent = s.dataDir || "";
+  } catch { /* show empty form */ }
+  settingsModal.classList.add("open");
+}
+function closeSettings(): void { settingsModal.classList.remove("open"); }
+async function saveSettings(): Promise<void> {
+  settingsSaveBtn.disabled = true;
+  try {
+    await window.api.setSettings({
+      openaiKey: settingsOpenAI.value.trim(),
+      anthropicKey: settingsAnthropic.value.trim(),
+      openrouterKey: settingsOpenRouter.value.trim(),
+    });
+    statusEl.classList.remove("err");
+    statusEl.textContent = "reconnecting to backend…";  // next "ready" overwrites this
+  } finally {
+    settingsSaveBtn.disabled = false;
+    closeSettings();
+  }
+}
+settingsBtn.addEventListener("click", openSettings);
+settingsCancelBtn.addEventListener("click", closeSettings);
+settingsSaveBtn.addEventListener("click", saveSettings);
+settingsModal.addEventListener("click", (e) => { if (e.target === settingsModal) closeSettings(); });
+
 // Cmd/Ctrl+N → new thread
 window.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "n") {
@@ -562,15 +657,16 @@ window.addEventListener("keydown", (e) => {
     newThread();
     inputEl.focus();
   }
+  if (e.key === "Escape" && settingsModal.classList.contains("open")) closeSettings();
 });
 
 // ---- boot ------------------------------------------------------------------
 const _mermaid = (window as any).mermaid;
 if (_mermaid) _mermaid.initialize({ startOnLoad: false, theme: "neutral", securityLevel: "strict" });
 
-if (loadState()) { renderThreads(); renderMessages(); }
-else newThread();
 inputEl.focus();
-// Backstop for the startup race: explicitly ask the backend for its status,
-// in case the initial "ready" was emitted before this listener existed.
+// Backstop for the startup race: explicitly ask the backend for its status and
+// the persisted threads, in case the initial "ready" was emitted before this
+// listener existed. hydrateThreads() creates a first thread if the store is empty.
 window.api.sendRequest({ type: "info" });
+window.api.sendRequest({ type: "threads_dump" });

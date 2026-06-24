@@ -27,4 +27,12 @@ contextBridge.exposeInMainWorld("api", {
   /** Subscribe to ingestion progress events. */
   onIngestEvent: (cb: (event: any) => void) =>
     ipcRenderer.on("ingest-event", (_e, ev) => cb(ev)),
+
+  /** Read persisted settings (API keys + data dir). */
+  getSettings: (): Promise<{ openaiKey: string; anthropicKey: string; openrouterKey: string; dataDir: string }> =>
+    ipcRenderer.invoke("get-settings"),
+
+  /** Persist API keys; the backend is restarted to pick them up. */
+  setSettings: (s: { openaiKey: string; anthropicKey: string; openrouterKey: string }): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke("set-settings", s),
 });

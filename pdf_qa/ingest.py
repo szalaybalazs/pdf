@@ -90,7 +90,8 @@ def ingest_pdf(pdf_path: Path, store: VectorStore, embed: bool, use_ocr: bool = 
 
     for pno in tqdm(range(len(doc)), desc=pdf_path.name[:30], unit="pg", leave=False):
         page = doc[pno]
-        img_path = config.PAGES_DIR / safe / f"p{pno+1:04d}.png"
+        rel_img = f"{safe}/p{pno+1:04d}.png"          # stored path, relative to PAGES_DIR
+        img_path = config.PAGES_DIR / rel_img          # absolute path for rendering
         try:
             render_page(page, img_path, config.RENDER_DPI)
         except Exception as e:  # never let one bad page abort the whole book
@@ -107,7 +108,7 @@ def ingest_pdf(pdf_path: Path, store: VectorStore, embed: bool, use_ocr: bool = 
             pending_chunks.append(Chunk(
                 id=f"{pdf_path.name}:p{pno+1:04d}:c{ci}",
                 doc=pdf_path.name, page=pno + 1, chunk_index=ci,
-                text=ctext, image_path=str(img_path),
+                text=ctext, image_path=rel_img,
             ))
             pending_texts.append(ctext)
 

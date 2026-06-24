@@ -20,9 +20,32 @@ your OS default viewer**. Supports **multiple chat threads**.
 
 The renderer never touches Node directly — `preload.ts` exposes a tiny, safe
 `window.api`. The main process spawns `python -m pdf_qa.serve` and streams its
-line-delimited JSON events (`ready` / `tool` / `answer` / `error`) to the UI.
-Threads are UI state; each query sends that thread's history, so the backend
-stays stateless and threads never bleed into each other.
+line-delimited JSON events (`ready` / `tool` / `answer` / `error` / `threads` /
+`thread_title` / `thread_results`) to the UI. Each query sends that thread's
+history, so answering stays stateless; the threads themselves are now **persisted
+in SQLite by the backend** (see below).
+
+## Data directory
+
+All app data lives under Electron's per-user directory
+(`app.getPath('userData')` — e.g. `~/Library/Application Support/pdf_qa/` on
+macOS). The main process passes it to Python as `PDF_QA_DATA_DIR`. Inside:
+
+- `index/` — page renders (`pages/<doc>/p####.png`) + the PDF vector store
+  (`store.npy` / `store.jsonl`).
+- `threads.db` — SQLite store of chat threads, messages, and per-thread search
+  embeddings (powers the sidebar **Search chats** box).
+- `settings.json` — API keys set via the in-app **Settings** (gear icon), encrypted
+  with Electron `safeStorage`. These override any `.env` values.
+
+**Migrating an existing `./index`:** earlier versions wrote the index into the
+project's `./index/`. Move it into the new location once with:
+```bash
+PDF_QA_DATA_DIR="$HOME/Library/Application Support/pdf_qa" python -m pdf_qa.migrate
+```
+(or just re-run `python -m pdf_qa.ingest` with that same `PDF_QA_DATA_DIR` to
+rebuild). Running the bare CLI without `PDF_QA_DATA_DIR` still uses `./index` as
+before.
 
 ## Prerequisites
 1. The Python backend set up and an index built (see the project root README):
@@ -55,17 +78,24 @@ PDF_QA_PYTHON=/path/to/python npm start
 
 ## Using it
 - **New thread** — the ＋ button in the sidebar; switch threads by clicking them, delete with ✕.
+- **Thread titles** — after the first answer the chat is auto-summarised into a short label by a small model (`SUMMARY_MODEL`, default `gpt-4o-mini`).
+- **Search chats** — the search box above the thread list does *semantic* search across past threads (not just substring), powered by the per-thread embeddings in SQLite.
+- **Model picker** — top-right select switches the answerer between OpenAI and Anthropic Opus.
+- **Settings** — the gear icon opens a dialog to set the OpenAI and Anthropic API keys (stored encrypted); saving restarts the backend so the new keys take effect.
 - **Ask** — type and press Enter (Shift+Enter for a newline).
 - **Tool trace** — every answer shows the pipeline steps with timings, exactly like the CLI.
 - **debug** — the toggle (top-right) reveals similarity scores, page image dimensions, and token counts; it also asks the backend for that extra detail on subsequent queries.
 - **Figures** — citations like *(book p.106)* are underlined, and each answer lists its source pages as chips. Click either to open that page image in your default viewer.
 
 ## Files
-- `src/main.ts` — Electron main: spawns the backend, bridges JSON↔IPC, opens figures via `shell.openPath`
+- `src/main.ts` — Electron main: spawns the backend, bridges JSON↔IPC, injects data dir + keys, opens figures via `shell.openPath`
+- `src/settings.ts` — encrypted API-key storage (`safeStorage`) under userData
 - `src/preload.ts` — safe `window.api` bridge (contextIsolation on, nodeIntegration off)
-- `renderer/index.html` · `renderer/styles.css` — shell + dark theme
-- `renderer/renderer.ts` — threads, live trace, answer rendering, clickable figures
+- `renderer/index.html` · `renderer/styles.css` — shell + theme (incl. settings modal, search box)
+- `renderer/renderer.ts` — threads, live trace, answer rendering, clickable figures, search, settings
 - `../pdf_qa/serve.py` — the Python side of the protocol
+- `../pdf_qa/threads.py` — SQLite thread store + cross-thread vector search
+- `../pdf_qa/migrate.py` — one-time `./index` → data-dir migration
 
 ## Validation
 Type-checks clean (both TS projects). The renderer was driven through a

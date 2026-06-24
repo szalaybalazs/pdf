@@ -4,11 +4,13 @@ import { api } from "../trpc";
 
 const labelCls = "mb-1.5 mt-2.5 text-[12px] font-medium text-muted";
 const inputCls = "w-full rounded-lg border border-border-strong bg-surface px-3 py-2.5 font-mono text-[13px] text-ink outline-none transition focus:border-tint focus:ring-[3px] focus:ring-tint/15";
+const textareaCls = "min-h-[120px] w-full resize-y rounded-lg border border-border-strong bg-surface px-3 py-2.5 text-[13px] leading-relaxed text-ink outline-none transition focus:border-tint focus:ring-[3px] focus:ring-tint/15";
 
 export function Settings() {
   const [openai, setOpenai] = useState("");
   const [anthropic, setAnthropic] = useState("");
   const [openrouter, setOpenrouter] = useState("");
+  const [systemPrompt, setSystemPrompt] = useState("");
   const [dataDir, setDataDir] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -19,6 +21,7 @@ export function Settings() {
       setOpenai(s.openaiKey || "");
       setAnthropic(s.anthropicKey || "");
       setOpenrouter(s.openrouterKey || "");
+      setSystemPrompt(s.systemPrompt || "");
       setDataDir(s.dataDir || "");
     }).catch(() => { /* show empty form */ });
     return () => { alive = false; };
@@ -29,6 +32,7 @@ export function Settings() {
     try {
       await api.setSettings({
         openaiKey: openai.trim(), anthropicKey: anthropic.trim(), openrouterKey: openrouter.trim(),
+        systemPrompt: systemPrompt.trim(),
       });
       store.statusErr = false;
       store.status = "reconnecting to backend…";   // next "ready" overwrites this
@@ -43,7 +47,7 @@ export function Settings() {
       className="fixed inset-0 z-[100] flex items-center justify-center bg-ink/30 backdrop-blur-[2px]"
       onClick={(e) => { if (e.target === e.currentTarget) closeSettings(); }}
     >
-      <div className="flex w-[460px] max-w-[calc(100vw-48px)] flex-col rounded-2xl border border-border-strong bg-bg p-6 shadow-[0_8px_30px_rgba(20,20,18,0.18)]">
+      <div className="flex max-h-[calc(100vh-48px)] w-[520px] max-w-[calc(100vw-48px)] flex-col overflow-y-auto rounded-2xl border border-border-strong bg-bg p-6 shadow-[0_8px_30px_rgba(20,20,18,0.18)]">
         <div className="mb-3.5 text-[17px] font-semibold tracking-tight text-ink">Settings</div>
 
         <label className={labelCls}>OpenAI API key</label>
@@ -61,6 +65,15 @@ export function Settings() {
         <div className="mt-1.5 text-[11.5px] leading-snug text-faint">
           When set, chat &amp; vision route through OpenRouter (GPT and Claude). Embeddings still use the OpenAI key.
         </div>
+
+        <label className={labelCls}>System prompt</label>
+        <textarea className={textareaCls} autoComplete="off" spellCheck={true}
+          placeholder="Additional instructions appended to the default system prompt"
+          value={systemPrompt} onChange={(e) => setSystemPrompt(e.target.value)} />
+        <div className="mt-1.5 text-[11.5px] leading-snug text-faint">
+          Optional. When set, this is appended after the built-in document-grounding instructions.
+        </div>
+
         <div className="mt-4 text-[12px] text-faint">Keys are stored encrypted on this machine. Data directory:</div>
         <div className="mt-0.5 break-all font-mono text-[11px] text-muted">{dataDir}</div>
 

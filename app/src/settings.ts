@@ -14,6 +14,7 @@ export interface Settings {
   openaiKey: string;
   anthropicKey: string;
   openrouterKey: string;
+  systemPrompt: string;
 }
 
 function settingsPath(): string {
@@ -34,9 +35,10 @@ export function readSettings(): Settings {
       openaiKey: dec(obj.openaiKey),
       anthropicKey: dec(obj.anthropicKey),
       openrouterKey: dec(obj.openrouterKey),
+      systemPrompt: typeof obj.systemPrompt === "string" ? obj.systemPrompt : "",
     };
   } catch {
-    return { openaiKey: "", anthropicKey: "", openrouterKey: "" };
+    return { openaiKey: "", anthropicKey: "", openrouterKey: "", systemPrompt: "" };
   }
 }
 
@@ -49,6 +51,7 @@ export function writeSettings(s: Settings): void {
     openaiKey: encv(s.openaiKey || ""),
     anthropicKey: encv(s.anthropicKey || ""),
     openrouterKey: encv(s.openrouterKey || ""),
+    systemPrompt: s.systemPrompt || "",
   };
   fs.writeFileSync(settingsPath(), JSON.stringify(obj, null, 2), { mode: 0o600 });
 }

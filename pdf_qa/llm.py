@@ -189,6 +189,15 @@ THINK_INSTRUCTION = (
 )
 
 
+def _system_prompt(think: bool = False) -> str:
+    system = SYSTEM_PROMPT
+    if config.CUSTOM_SYSTEM_PROMPT:
+        system += f"\n\nAdditional user-provided system instructions:\n{config.CUSTOM_SYSTEM_PROMPT}"
+    if think:
+        system += THINK_INSTRUCTION
+    return system
+
+
 def _followup_note(history, has_images: bool) -> str:
     """Per-turn guidance: force page reading on the first message; on follow-ups
     the model already has the conversation, so only fetch pages if this question
@@ -218,8 +227,7 @@ def _build_messages(question, contexts, image_paths, history, think) -> list[dic
         content.append({"type": "image_url",
                         "image_url": {"url": _image_data_url(p, config.VISION_MAX_DIM)}})
 
-    system = SYSTEM_PROMPT + (THINK_INSTRUCTION if think else "")
-    messages = [{"role": "system", "content": system}]
+    messages = [{"role": "system", "content": _system_prompt(think)}]
     if history:
         messages.extend(history)
     messages.append({"role": "user", "content": content})
@@ -815,7 +823,7 @@ def _answer_stream_cli(question: str, contexts: list[dict], image_paths: list[st
     prompt = (f"{hist}Retrieved passages from the indexed PDF library:\n{passages}\n\n"
               f"Question: {question}")
 
-    args = [binname, "-p", "--append-system-prompt", SYSTEM_PROMPT]
+    args = [binname, "-p", "--append-system-prompt", _system_prompt(False)]
     if model:
         args += ["--model", model]
 
@@ -880,7 +888,7 @@ def _answer_stream_anthropic(question: str, contexts: list[dict], image_paths: l
     import time
     client = _anthropic_client()
     messages = _build_anthropic_messages(question, contexts, image_paths, history)
-    system = SYSTEM_PROMPT + (THINK_INSTRUCTION if think else "")
+    system = _system_prompt(think)
     tools = ([ANTHROPIC_CALC_TOOL]
              + ([ANTHROPIC_SEARCH_TOOL] if searcher else [])
              + ([ANTHROPIC_GET_PAGES_TOOL] if pager else []))

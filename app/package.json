@@ -1,7 +1,9 @@
 {
   "name": "pdf-qa-desktop",
-  "version": "0.1.0",
+  "productName": "PDF QA",
+  "version": "0.0.1",
   "description": "Electron desktop shell for the pdf_qa multimodal chat (spawns the Python backend).",
+  "author": "Balázs Szalay <balazs@szalay.me>",
   "main": "dist/main.js",
   "scripts": {
     "build:main": "tsc -p tsconfig.main.json",
@@ -10,11 +12,18 @@
     "build:css": "tailwindcss -i renderer/app.css -o renderer/styles.css --minify",
     "watch:css": "tailwindcss -i renderer/app.css -o renderer/styles.css --watch",
     "build": "npm run build:main && npm run build:renderer && npm run build:css",
+    "build:backend": "bash ../scripts/build-backend.sh",
     "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.renderer.json",
     "start": "npm run build && electron .",
-    "dev": "npm run build && electron . --enable-logging"
+    "dev": "npm run build && electron . --enable-logging",
+    "dist": "npm run build && electron-builder",
+    "dist:mac": "npm run build && electron-builder --mac",
+    "dist:win": "npm run build && electron-builder --win",
+    "publish": "npm run build && cross-env AWS_PROFILE=personal electron-builder --publish always"
   },
   "devDependencies": {
+    "electron-builder": "^25.1.8",
+    "cross-env": "^7.0.3",
     "@tailwindcss/cli": "^4.3.1",
     "@types/node": "^20.11.0",
     "@types/react": "^18.3.31",
@@ -34,6 +43,7 @@
     "@trpc/client": "^10.45.4",
     "@trpc/server": "^10.45.4",
     "electron-trpc": "^0.7.1",
+    "electron-updater": "^6.3.9",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "zod": "^3.25.76"

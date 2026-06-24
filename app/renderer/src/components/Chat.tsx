@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { store, activeThread, send, setDebug, setModel } from "../store";
 import { Assistant } from "./Assistant";
+import { APP_NAME } from "../../../src/branding";
 
 function Messages() {
   const t = activeThread();
@@ -63,7 +64,7 @@ function Composer() {
     <footer className="absolute bottom-0 left-0 right-0 flex flex-col items-center bg-[linear-gradient(0deg,var(--color-bg)_52%,transparent)] px-7 pb-4">
       <div className="composer-shell flex w-full max-w-[780px] items-end gap-2.5 rounded-[24px] border border-border bg-bg py-2 pl-[18px] pr-2 transition focus-within:border-border-strong focus-within:shadow-[0_12px_36px_rgba(20,20,18,0.12)]">
         <textarea
-          ref={ref} rows={1} placeholder="Message pdf_qa"
+          ref={ref} rows={1} placeholder={`Message ${APP_NAME}`}
           className="max-h-[180px] flex-1 resize-none border-none bg-transparent py-2.5 text-[15px] leading-normal text-ink outline-none placeholder:text-faint"
           value={value}
           onChange={(e) => setValue(e.target.value)}

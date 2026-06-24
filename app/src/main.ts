@@ -15,14 +15,40 @@ import * as fs from "fs";
 import { createIPCHandler } from "electron-trpc/main";
 import { readSettings, writeSettings, Settings } from "./settings";
 import { createAppRouter, RouterDeps } from "./trpc";
+import { checkForUpdates, initAutoUpdater } from "./updater";
+import { APP_NAME } from "./branding";
 
 let win: BrowserWindow | null = null;
 let serve: ChildProcessWithoutNullStreams | null = null;
 let restarting = false;  // set while we intentionally kill+respawn the backend
 
+app.setName(APP_NAME);
+
 // project root = parent of the app/ directory (dist/ -> app/ -> project/)
 const PROJECT_ROOT = path.resolve(__dirname, "..", "..");
 const PYTHON = process.env.PDF_QA_PYTHON || "python3";
+
+// --- backend command resolution ---------------------------------------------
+// In development we run the Python source directly (`python3 -m pdf_qa.<sub>`).
+// In a packaged build there is no interpreter or source tree: PyInstaller has
+// frozen everything into a standalone binary shipped under Resources/backend
+// (see pdf_qa_backend.spec + electron-builder.yml). The frozen binary takes the
+// sub-command as its first argument instead of `-m pdf_qa.<sub>`.
+const FROZEN_BACKEND_DIR = path.join(process.resourcesPath ?? "", "backend");
+
+function backendCommand(sub: "serve" | "ingest", extra: string[] = []): {
+  cmd: string; args: string[]; cwd: string;
+} {
+  if (app.isPackaged) {
+    const exe = process.platform === "win32" ? "pdf-qa-backend.exe" : "pdf-qa-backend";
+    return {
+      cmd: path.join(FROZEN_BACKEND_DIR, exe),
+      args: [sub, ...extra],
+      cwd: FROZEN_BACKEND_DIR,
+    };
+  }
+  return { cmd: PYTHON, args: ["-u", "-m", `pdf_qa.${sub}`, ...extra], cwd: PROJECT_ROOT };
+}
 
 // --- debug logging ----------------------------------------------------------
 // Everything the main process does is timestamped to the console *and* appended
@@ -147,14 +173,17 @@ function backendEnv(): NodeJS.ProcessEnv {
   if (settings.openaiKey) env.OPENAI_API_KEY = settings.openaiKey;
   if (settings.anthropicKey) env.ANTHROPIC_API_KEY = settings.anthropicKey;
   if (settings.openrouterKey) env.OPENROUTER_API_KEY = settings.openrouterKey;
+  if (settings.systemPrompt.trim()) env.PDF_QA_SYSTEM_PROMPT = settings.systemPrompt;
   return env;
 }
 
 function startBackend(): void {
-  log("info", `spawning backend: ${PYTHON} -u -m pdf_qa.serve (cwd=${PROJECT_ROOT})`);
-  serve = spawn(PYTHON, ["-u", "-m", "pdf_qa.serve"], {
-    cwd: PROJECT_ROOT,
+  const { cmd, args, cwd } = backendCommand("serve");
+  log("info", `spawning backend: ${cmd} ${args.join(" ")} (cwd=${cwd})`);
+  serve = spawn(cmd, args, {
+    cwd,
     env: backendEnv(),
+    windowsHide: true,   // hide the frozen backend's console window on Windows
   });
   log("info", `backend pid=${serve.pid ?? "?"}`);
 
@@ -217,7 +246,7 @@ function createWindow(): void {
     height: 800,
     minWidth: 900,
     minHeight: 600,
-    title: "pdf_qa",
+    title: APP_NAME,
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 13, y: 13 },
     vibrancy: process.platform === "darwin" ? "under-window" : undefined,
@@ -249,8 +278,11 @@ function installApplicationMenu(): void {
   const isMac = process.platform === "darwin";
   const template: MenuItemConstructorOptions[] = [
     ...(isMac ? [{
-      label: app.name,
+      label: APP_NAME,
       submenu: [
+        { role: "about", label: `About ${APP_NAME}` },
+        { label: "Check for Updates…", click: () => { void checkForUpdates(true); } },
+        { type: "separator" },
         { label: "Settings…", accelerator: "CommandOrControl+,", click: () => dispatchRendererEvent("pdf-qa-open-settings") },
         { type: "separator" },
         { role: "services" },
@@ -267,6 +299,8 @@ function installApplicationMenu(): void {
       submenu: [
         { label: "New Chat", accelerator: "CommandOrControl+N", click: () => dispatchRendererEvent("pdf-qa-new-thread") },
         ...(!isMac ? [
+          { type: "separator" } as MenuItemConstructorOptions,
+          { label: "Check for Updates…", click: () => { void checkForUpdates(true); } } as MenuItemConstructorOptions,
           { type: "separator" } as MenuItemConstructorOptions,
           { label: "Settings…", accelerator: "CommandOrControl+,", click: () => dispatchRendererEvent("pdf-qa-open-settings") } as MenuItemConstructorOptions,
           { type: "separator" } as MenuItemConstructorOptions,
@@ -377,11 +411,12 @@ async function getSettingsAction() {
 }
 
 async function setSettingsAction(s: Settings): Promise<{ ok: boolean }> {
-  log("info", "set-settings (keys updated); restarting backend");
+  log("info", "set-settings (settings updated); restarting backend");
   writeSettings({
     openaiKey: s.openaiKey || "",
     anthropicKey: s.anthropicKey || "",
     openrouterKey: s.openrouterKey || "",
+    systemPrompt: s.systemPrompt || "",
   });
   restartBackend(); // respawn so the Python backend picks up the new keys
   return { ok: true };
@@ -401,8 +436,8 @@ async function addPdfsAction(): Promise<{ canceled: boolean; count?: number }> {
   rememberDocPaths(picked.filePaths);   // so we can "open" them later
 
   await new Promise<void>((resolve) => {
-    const proc = spawn(PYTHON, ["-u", "-m", "pdf_qa.ingest", "--add", ...picked.filePaths, "--json"],
-      { cwd: PROJECT_ROOT, env: backendEnv() });
+    const { cmd, args, cwd } = backendCommand("ingest", ["--add", ...picked.filePaths, "--json"]);
+    const proc = spawn(cmd, args, { cwd, env: backendEnv(), windowsHide: true });
     log("info", `ingest pid=${proc.pid ?? "?"}`);
     const rl = readline.createInterface({ input: proc.stdout });
     rl.on("line", (line) => {
@@ -486,6 +521,7 @@ app.whenReady().then(() => {
   startBackend();
   installApplicationMenu();
   createWindow();
+  initAutoUpdater(() => win, log);
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

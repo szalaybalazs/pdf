@@ -38,6 +38,8 @@ def resolve_image(p: str) -> str:
     return str(PAGES_DIR / p)
 
 # --- Models ------------------------------------------------------------------
+CUSTOM_SYSTEM_PROMPT = os.getenv("PDF_QA_SYSTEM_PROMPT", "").strip()
+
 EMBED_MODEL = os.getenv("EMBED_MODEL", "text-embedding-3-small")  # cheap, 1536-d
 # Small/cheap model used only to summarise a chat into a short thread title.
 # Always OpenAI (its key is required for embeddings regardless of the answerer).

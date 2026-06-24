@@ -12,7 +12,7 @@ import { z } from "zod";
 import type { EventEmitter } from "events";
 
 export interface AppSettings {
-  openaiKey: string; anthropicKey: string; openrouterKey: string; dataDir?: string;
+  openaiKey: string; anthropicKey: string; openrouterKey: string; systemPrompt: string; dataDir?: string;
 }
 
 export interface RouterDeps {
@@ -21,7 +21,7 @@ export interface RouterDeps {
   markServeSubscribed: () => void;
   sendToBackend: (req: unknown) => void;
   getSettings: () => Promise<AppSettings>;
-  setSettings: (s: { openaiKey: string; anthropicKey: string; openrouterKey: string }) => Promise<{ ok: boolean }>;
+  setSettings: (s: { openaiKey: string; anthropicKey: string; openrouterKey: string; systemPrompt: string }) => Promise<{ ok: boolean }>;
   openFigure: (filePath: string) => Promise<string>;
   openDoc: (name: string) => Promise<string>;
   removeDoc: (name: string) => Promise<void>;
@@ -32,7 +32,12 @@ export interface RouterDeps {
 
 const t = initTRPC.create({ isServer: true });
 
-const keys = z.object({ openaiKey: z.string(), anthropicKey: z.string(), openrouterKey: z.string() });
+const keys = z.object({
+  openaiKey: z.string(),
+  anthropicKey: z.string(),
+  openrouterKey: z.string(),
+  systemPrompt: z.string(),
+});
 
 export function createAppRouter(deps: RouterDeps) {
   return t.router({

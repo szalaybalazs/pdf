@@ -2,3 +2,9 @@
 index/
 __pycache__/
 *.pyc
+build/
+dist/
+*.spec.bak
+.signing/
+*.pfx
+*.p12

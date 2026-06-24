@@ -1,4 +1,4 @@
-# pdf_qa — desktop app (Electron + TypeScript)
+# PDF QA — desktop app (Electron + TypeScript)
 
 A desktop shell around the Python `pdf_qa` backend. It shows the **same
 information as the CLI** — a live tool-call trace (embed → search →

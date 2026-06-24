@@ -1,0 +1,83 @@
+name: Release
+
+# Builds, signs/notarizes and publishes the desktop app to S3 (served via
+# update.szalay.me) for macOS (arm64) and Windows (x64).
+#
+# Trigger: push a tag like v0.0.2 *after* bumping app/package.json to the same
+# version (electron-updater compares against package.json's version, not the tag).
+#     cd app && npm version patch && cd .. && git push --follow-tags
+#
+# Or run manually from the Actions tab (workflow_dispatch).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Apple Silicon build. To also ship Intel Macs, add a second entry
+          # `{ os: macos-13, platform: mac, arch: x64 }` — but note both mac jobs
+          # then write latest-mac.yml and the later upload wins, so you'd need to
+          # merge the two manifests before the final publish.
+          - os: macos-14
+            platform: mac
+            arch: arm64
+          - os: windows-latest
+            platform: win
+            arch: x64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python deps + PyInstaller
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt pyinstaller
+
+      - name: Freeze backend (PyInstaller)
+        shell: bash
+        env:
+          PDF_QA_BUILD_PYTHON: python
+        run: bash scripts/build-backend.sh
+
+      - name: Install app deps
+        working-directory: app
+        run: npm ci
+
+      - name: Build app (main + renderer + css)
+        working-directory: app
+        run: npm run build
+
+      - name: Publish ${{ matrix.platform }} (${{ matrix.arch }})
+        working-directory: app
+        shell: bash
+        run: npx electron-builder --${{ matrix.platform }} --${{ matrix.arch }} --publish always
+        env:
+          # S3 upload (the `personal` profile isn't present in CI; use keys).
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          # macOS code-signing + notarization (ignored on the Windows runner).
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Windows code-signing (ignored on the macOS runner).
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}

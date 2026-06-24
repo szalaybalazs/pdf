@@ -1,0 +1,96 @@
+# electron-builder configuration.
+#
+#   npm run dist          # build installers for the current OS (no upload)
+#   npm run dist:mac      # macOS dmg + zip
+#   npm run dist:win      # Windows nsis
+#   npm run publish       # build + upload installers AND latest*.yml to S3
+#
+# Auto-update (electron-updater) reads the latest-mac.yml / latest.yml that the
+# S3 publish step writes alongside the installers. The mac `zip` target is what
+# the updater actually applies on macOS — keep it enabled.
+appId: co.triyit.pdfqa
+productName: PDF QA
+copyright: Copyright © 2026 Triyit
+
+directories:
+  output: release
+  buildResources: build
+
+# What goes inside the app bundle (Electron app code + renderer assets).
+# Production node_modules are bundled automatically.
+files:
+  - dist/**/*
+  - renderer/**/*
+  - package.json
+  - "!**/*.map"
+  - "!_*.mjs"
+
+# The PyInstaller-frozen backend (see scripts/build-backend.sh) is staged at
+# app/backend-dist/ and shipped verbatim into Contents/Resources/backend.
+extraResources:
+  - from: backend-dist
+    to: backend
+    filter:
+      - "**/*"
+
+# --- macOS -------------------------------------------------------------------
+mac:
+  category: public.app-category.productivity
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip          # required for electron-updater on macOS
+      arch: [arm64, x64]
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  # Notarization runs automatically when APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD
+  # and APPLE_TEAM_ID are present in the environment (notarytool under the hood).
+  notarize: true
+  # Code-signing identity is taken from CSC_LINK / CSC_KEY_PASSWORD (a Developer
+  # ID Application .p12), or the login keychain when building locally.
+
+dmg:
+  title: "${productName} ${version}"
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
+# --- Windows -----------------------------------------------------------------
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  # Signing: set WIN_CSC_LINK (path/base64 of the .pfx) + WIN_CSC_KEY_PASSWORD,
+  # or configure an Azure Trusted Signing / EV token per electron-builder docs.
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  artifactName: "${productName}-Setup-${version}.${ext}"
+
+# --- Update feed / artifact hosting ------------------------------------------
+# Two providers, by design:
+#   1. generic — what the SHIPPED app reads. Baked into app-update.yml, so the
+#      updater downloads from the CloudFront custom domain (private bucket stays
+#      private). This is the primary feed; it must be listed first.
+#   2. s3 — how `electron-builder --publish always` UPLOADS the artifacts. The
+#      generic provider is download-only, so the s3 entry does the actual upload
+#      using the AWS `personal` profile. Both target the same bucket/prefix, so
+#      what's uploaded to s3://…/pdf-qa is exactly what update.szalay.me/pdf-qa
+#      serves.
+publish:
+  - provider: generic
+    url: https://update.szalay.me/pdf-qa
+  - provider: s3
+    bucket: desktop-electron-app-updates
+    region: eu-central-1
+    path: pdf-qa         # per-app prefix; other apps share the bucket/domain under their own
+    acl: null            # bucket is private; CloudFront OAC serves it. (ACLs are
+                         # disabled anyway under Bucket-owner-enforced.)

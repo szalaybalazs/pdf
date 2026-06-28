@@ -176,6 +176,7 @@ export function Sidebar() {
               className={`group mb-px flex h-[32px] cursor-pointer items-center gap-2 rounded-lg pl-2.5 pr-1.5 text-[13px] transition-colors ${active ? "bg-bg font-medium text-ink shadow-[0_1px_2px_rgba(20,20,18,0.03)]" : "text-muted hover:bg-bg hover:text-ink"}`}
               onClick={() => selectThread(t.id)}
             >
+              {t.busy && <SidebarSpinner />}
               <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{t.title}</span>
               <button
                 className="flex h-[20px] w-[20px] items-center justify-center rounded text-faint opacity-0 transition-opacity hover:!text-danger hover:bg-surface-2 group-hover:opacity-70"

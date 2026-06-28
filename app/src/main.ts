@@ -101,7 +101,7 @@ function logFilePath(): string | null {
 }
 
 function openLog(): void {
-  log("info", `=== session start · ${new Date().toISOString()} · python=${PYTHON} ===`);
+  log("info", `=== session start · ${new Date().toISOString()} · v${app.getVersion()} · python=${PYTHON} ===`);
   log("info", `log file: ${logFilePath()}`);
 }
 

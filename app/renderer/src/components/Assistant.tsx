@@ -61,10 +61,16 @@ export function Assistant({ m }: { m: AssistantMsg }) {
   const contentRef = useRef<HTMLDivElement>(null);
   const [copied, setCopied] = useState(false);
 
+  // NOTE: the store mutates `m.stream` in place during streaming (it appends to
+  // the last array element or pushes), so its reference never changes. Memoizing
+  // on `[m.stream]` alone would return stale segments for the whole stream. Key
+  // the memo on values that DO change per delta: `m.raw` (reassigned to a new
+  // string on each text delta) and `m.stream.length` (grows on each inline-tool
+  // push). Without this, the answer only repaints when it finishes.
   const segments: Segment[] = useMemo(
     () => (m.stream && m.stream.length ? buildSegments(m.stream)
       : m.text ? [{ kind: "text", text: m.text }] : []),
-    [m.stream, m.text],
+    [m.stream, m.stream?.length, m.raw, m.text],
   );
 
   // look up a calculation by expression so timeline calc rows can show status.

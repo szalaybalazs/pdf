@@ -81,3 +81,12 @@ jobs:
           # Windows code-signing (ignored on the macOS runner).
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+
+      - name: Invalidate CloudFront cache
+        shell: bash
+        run: bash scripts/invalidate-cloudfront.sh
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          # Override the default in the script if you change distributions:
+          CF_DISTRIBUTION_ID: E6428K3WFUDSE

@@ -15,6 +15,12 @@ export interface Settings {
   anthropicKey: string;
   openrouterKey: string;
   systemPrompt: string;
+  // Local OpenAI-compatible server (Ollama, LM Studio, llama.cpp, vLLM, …).
+  // Base URL + model id are not secrets (stored plaintext); the API key is
+  // optional (most local servers ignore it) and encrypted like the others.
+  localBaseUrl: string;
+  localApiKey: string;
+  localModel: string;
 }
 
 function settingsPath(): string {
@@ -36,9 +42,15 @@ export function readSettings(): Settings {
       anthropicKey: dec(obj.anthropicKey),
       openrouterKey: dec(obj.openrouterKey),
       systemPrompt: typeof obj.systemPrompt === "string" ? obj.systemPrompt : "",
+      localBaseUrl: typeof obj.localBaseUrl === "string" ? obj.localBaseUrl : "",
+      localApiKey: dec(obj.localApiKey),
+      localModel: typeof obj.localModel === "string" ? obj.localModel : "",
     };
   } catch {
-    return { openaiKey: "", anthropicKey: "", openrouterKey: "", systemPrompt: "" };
+    return {
+      openaiKey: "", anthropicKey: "", openrouterKey: "", systemPrompt: "",
+      localBaseUrl: "", localApiKey: "", localModel: "",
+    };
   }
 }
 
@@ -52,6 +64,9 @@ export function writeSettings(s: Settings): void {
     anthropicKey: encv(s.anthropicKey || ""),
     openrouterKey: encv(s.openrouterKey || ""),
     systemPrompt: s.systemPrompt || "",
+    localBaseUrl: s.localBaseUrl || "",
+    localApiKey: encv(s.localApiKey || ""),
+    localModel: s.localModel || "",
   };
   fs.writeFileSync(settingsPath(), JSON.stringify(obj, null, 2), { mode: 0o600 });
 }

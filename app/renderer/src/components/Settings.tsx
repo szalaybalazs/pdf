@@ -11,6 +11,9 @@ export function Settings() {
   const [anthropic, setAnthropic] = useState("");
   const [openrouter, setOpenrouter] = useState("");
   const [systemPrompt, setSystemPrompt] = useState("");
+  const [localBaseUrl, setLocalBaseUrl] = useState("");
+  const [localApiKey, setLocalApiKey] = useState("");
+  const [localModel, setLocalModel] = useState("");
   const [dataDir, setDataDir] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -22,6 +25,9 @@ export function Settings() {
       setAnthropic(s.anthropicKey || "");
       setOpenrouter(s.openrouterKey || "");
       setSystemPrompt(s.systemPrompt || "");
+      setLocalBaseUrl(s.localBaseUrl || "");
+      setLocalApiKey(s.localApiKey || "");
+      setLocalModel(s.localModel || "");
       setDataDir(s.dataDir || "");
     }).catch(() => { /* show empty form */ });
     return () => { alive = false; };
@@ -33,6 +39,7 @@ export function Settings() {
       await api.setSettings({
         openaiKey: openai.trim(), anthropicKey: anthropic.trim(), openrouterKey: openrouter.trim(),
         systemPrompt: systemPrompt.trim(),
+        localBaseUrl: localBaseUrl.trim(), localApiKey: localApiKey.trim(), localModel: localModel.trim(),
       });
       store.statusErr = false;
       store.status = "reconnecting to backend…";   // next "ready" overwrites this
@@ -72,6 +79,29 @@ export function Settings() {
           value={systemPrompt} onChange={(e) => setSystemPrompt(e.target.value)} />
         <div className="mt-1.5 text-[11.5px] leading-snug text-faint">
           Optional. When set, this is appended after the built-in document-grounding instructions.
+        </div>
+
+        <div className="mt-5 mb-1 border-t border-border-strong pt-4 text-[13px] font-semibold tracking-tight text-ink">
+          Custom / local LLM
+        </div>
+        <div className="mb-1 text-[11.5px] leading-snug text-faint">
+          Point at any OpenAI-compatible server (Ollama, LM Studio, llama.cpp, vLLM…). Set both the base URL and
+          model to add it to the model picker. Pick a vision + tool-calling model (e.g. qwen2.5-vl) for full features.
+        </div>
+
+        <label className={labelCls}>Base URL</label>
+        <input className={inputCls} type="text" autoComplete="off" spellCheck={false}
+          placeholder="http://localhost:11434/v1" value={localBaseUrl} onChange={(e) => setLocalBaseUrl(e.target.value)} />
+
+        <label className={labelCls}>Model</label>
+        <input className={inputCls} type="text" autoComplete="off" spellCheck={false}
+          placeholder="qwen2.5-vl" value={localModel} onChange={(e) => setLocalModel(e.target.value)} />
+
+        <label className={labelCls}>API key (optional)</label>
+        <input className={inputCls} type="password" autoComplete="off" spellCheck={false}
+          placeholder="local" value={localApiKey} onChange={(e) => setLocalApiKey(e.target.value)} />
+        <div className="mt-1.5 text-[11.5px] leading-snug text-faint">
+          Most local servers ignore the key. Embeddings still use the OpenAI key.
         </div>
 
         <div className="mt-4 text-[12px] text-faint">Keys are stored encrypted on this machine. Data directory:</div>

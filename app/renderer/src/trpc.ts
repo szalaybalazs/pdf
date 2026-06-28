@@ -23,7 +23,7 @@ export const api = {
   exportPdf: (html: string, title: string) => trpc.exportPdf.mutate({ html, title }),
   showDocMenu: (name: string) => trpc.showDocMenu.mutate(name),
   getSettings: () => trpc.getSettings.query(),
-  setSettings: (s: { openaiKey: string; anthropicKey: string; openrouterKey: string; systemPrompt: string }) =>
+  setSettings: (s: { openaiKey: string; anthropicKey: string; openrouterKey: string; systemPrompt: string; localBaseUrl: string; localApiKey: string; localModel: string }) =>
     trpc.setSettings.mutate(s),
   onServeEvent: (cb: (e: any) => void) => { trpc.serveEvents.subscribe(undefined, { onData: cb }); },
   onIngestEvent: (cb: (e: any) => void) => { trpc.ingestEvents.subscribe(undefined, { onData: cb }); },

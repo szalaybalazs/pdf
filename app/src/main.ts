@@ -230,6 +230,11 @@ function backendEnv(): NodeJS.ProcessEnv {
   if (settings.anthropicKey) env.ANTHROPIC_API_KEY = settings.anthropicKey;
   if (settings.openrouterKey) env.OPENROUTER_API_KEY = settings.openrouterKey;
   if (settings.systemPrompt.trim()) env.PDF_QA_SYSTEM_PROMPT = settings.systemPrompt;
+  // Local OpenAI-compatible server (Ollama, LM Studio, …). The backend only
+  // offers the "local" answerer when both base URL and model are set.
+  if (settings.localBaseUrl.trim()) env.LOCAL_BASE_URL = settings.localBaseUrl.trim();
+  if (settings.localApiKey.trim()) env.LOCAL_API_KEY = settings.localApiKey.trim();
+  if (settings.localModel.trim()) env.LOCAL_MODEL = settings.localModel.trim();
   return env;
 }
 
@@ -297,12 +302,17 @@ function startBackend(): void {
 }
 
 function createWindow(): void {
+  // Window/taskbar icon for Windows & Linux (macOS uses the app bundle's .icns).
+  // In a packaged app the exe already carries the icon; this mainly helps dev.
+  const iconPath = path.join(__dirname, "..", "build", "icon.png");
+  const windowIcon = process.platform !== "darwin" && fs.existsSync(iconPath) ? iconPath : undefined;
   win = new BrowserWindow({
     width: 1180,
     height: 800,
     minWidth: 900,
     minHeight: 600,
     title: APP_NAME,
+    icon: windowIcon,
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 13, y: 13 },
     vibrancy: process.platform === "darwin" ? "under-window" : undefined,
@@ -512,6 +522,9 @@ async function setSettingsAction(s: Settings): Promise<{ ok: boolean }> {
     anthropicKey: s.anthropicKey || "",
     openrouterKey: s.openrouterKey || "",
     systemPrompt: s.systemPrompt || "",
+    localBaseUrl: s.localBaseUrl || "",
+    localApiKey: s.localApiKey || "",
+    localModel: s.localModel || "",
   });
   restartBackend(); // respawn so the Python backend picks up the new keys
   return { ok: true };

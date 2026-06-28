@@ -36,6 +36,7 @@ extraResources:
 # --- macOS -------------------------------------------------------------------
 mac:
   category: public.app-category.productivity
+  icon: build/icon.icns
   target:
     - target: dmg
       arch: [arm64, x64]
@@ -63,6 +64,7 @@ dmg:
 
 # --- Windows -----------------------------------------------------------------
 win:
+  icon: build/icon.ico
   target:
     - target: nsis
       arch: [x64]
@@ -74,6 +76,8 @@ nsis:
   perMachine: false
   allowToChangeInstallationDirectory: true
   artifactName: "${productName}-Setup-${version}.${ext}"
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
 
 # --- Update feed / artifact hosting ------------------------------------------
 # Two providers, by design:

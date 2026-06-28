@@ -1,7 +1,7 @@
 {
   "name": "pdf-qa-desktop",
   "productName": "PDF QA",
-  "version": "0.0.3",
+  "version": "0.0.5",
   "description": "Electron desktop shell for the pdf_qa multimodal chat (spawns the Python backend).",
   "author": "Balázs Szalay <balazs@szalay.me>",
   "main": "dist/main.js",
@@ -19,7 +19,8 @@
     "dist": "npm run build && electron-builder",
     "dist:mac": "npm run build && electron-builder --mac",
     "dist:win": "npm run build && electron-builder --win",
-    "publish": "npm run build && cross-env AWS_PROFILE=personal electron-builder --publish always"
+    "publish": "npm run build && cross-env AWS_PROFILE=personal electron-builder --publish always && npm run invalidate",
+    "invalidate": "cross-env AWS_PROFILE=personal bash ../scripts/invalidate-cloudfront.sh"
   },
   "devDependencies": {
     "electron-builder": "^25.1.8",

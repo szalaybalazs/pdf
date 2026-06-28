@@ -77,15 +77,23 @@ s3://desktop-electron-app-updates/   (region eu-central-1)
    **Scope the publishing principal to this app's prefix** so one app's CI can't
    clobber another's releases:
    ```json
-   {
-     "Effect": "Allow",
-     "Action": ["s3:PutObject", "s3:GetObject", "s3:ListBucket"],
-     "Resource": [
-       "arn:aws:s3:::desktop-electron-app-updates",
-       "arn:aws:s3:::desktop-electron-app-updates/pdf-qa/*"
-     ]
-   }
+   [
+     {
+       "Effect": "Allow",
+       "Action": ["s3:PutObject", "s3:GetObject", "s3:ListBucket"],
+       "Resource": [
+         "arn:aws:s3:::desktop-electron-app-updates",
+         "arn:aws:s3:::desktop-electron-app-updates/pdf-qa/*"
+       ]
+     },
+     {
+       "Effect": "Allow",
+       "Action": "cloudfront:CreateInvalidation",
+       "Resource": "arn:aws:cloudfront::<acct-id>:distribution/E6428K3WFUDSE"
+     }
+   ]
    ```
+   The CloudFront permission is for the post-publish cache invalidation (below).
 3. The shipped app does **not** read S3 directly. It downloads updates over
    HTTPS from `https://update.szalay.me/pdf-qa/…`, a CloudFront distribution in
    front of the (private) bucket. See **Custom domain** below.
@@ -109,11 +117,11 @@ One-time AWS setup (Console or CLI):
    - **Alternate domain name (CNAME)**: `update.szalay.me`; attach the ACM cert.
    - **Default behavior**: allow `GET, HEAD`; Redirect HTTP→HTTPS; a caching
      policy is fine for the installers (they're immutable, versioned filenames).
-   - **Add a second behavior for `*.yml`** with caching effectively disabled
-     (e.g. CachePolicy `CachingDisabled`, or min/default/max TTL = 0). The
-     `latest*.yml` manifests are overwritten each release; if CloudFront caches
-     them, clients keep seeing the old version until the cache expires. *(Skip
-     this only if you instead invalidate `/pdf-qa/*.yml` after each publish.)*
+   - The `latest*.yml` manifests are overwritten each release, so they must not
+     be served stale. This is handled by an **automatic CloudFront invalidation**
+     after every publish (see Release steps) — `scripts/invalidate-cloudfront.sh`
+     invalidates `/pdf-qa/*`. As a belt-and-braces alternative you can also add a
+     `*.yml` behavior with `CachingDisabled`, but the invalidation alone is enough.
 3. **Bucket policy** — when you create the OAC, CloudFront gives you the policy
    to paste. It grants only the distribution `s3:GetObject`:
    ```json
@@ -146,9 +154,14 @@ cd app && npm version patch        # or minor/major
 # 2. Freeze the Python backend for THIS platform → app/backend-dist/
 npm run build:backend
 
-# 3. Build + sign + notarize + upload to S3 (uses the env vars above)
-npm run publish                    # electron-builder --publish always
+# 3. Build + sign + notarize + upload to S3, then invalidate CloudFront
+npm run publish                    # electron-builder --publish always && invalidate
 ```
+
+`npm run publish` ends by running `scripts/invalidate-cloudfront.sh` (the
+`invalidate` script) so the new `latest*.yml` is served immediately rather than
+from CloudFront's cache. To invalidate manually: `npm run invalidate`. CI does
+the same step after its publish (see `.github/workflows/release.yml`).
 
 Per-platform installers without uploading:
 ```bash

@@ -214,6 +214,10 @@ export function send(question: string): void {
   const docs = enabledDocs(t);
   if (threadDocs(t).length > 0 && docs.length === 0) return;
 
+  // Title the thread from the very first question, before the answer arrives,
+  // so a thread streaming in the background is identifiable right away.
+  const isFirstMessage = t.messages.every((m) => m.kind !== "user");
+
   const reqId = uid();
   t.messages.push({ kind: "user", text: question });
   t.messages.push({ kind: "assistant", reqId, trace: [], done: false });
@@ -224,6 +228,9 @@ export function send(question: string): void {
     type: "query", reqId, question, history: t.history,
     debug: store.debug, model: store.selectedModel, docs,
   });
+  if (isFirstMessage) {
+    api.sendRequest({ type: "title_suggest", id: t.id, question, answer: "" });
+  }
   bump();
   persistThread(t);
 }
@@ -477,9 +484,6 @@ export function handleServeEvent(ev: ServeEvent): void {
     thread.history = thread.history.slice(-8);
     thread.busy = false;
     persistThread(thread);
-    if (thread.messages.filter((m) => m.kind === "user").length === 1) {
-      api.sendRequest({ type: "title_suggest", id: thread.id, question, answer: a.text });
-    }
   } else if (ev.type === "error") {
     msg.error = (ev as BackendError).message; msg.done = true;
     thread.busy = false;

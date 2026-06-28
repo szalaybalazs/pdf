@@ -17,12 +17,18 @@ Events (stdout):
 
 `history` items are {"role":"user"|"assistant","content":"..."} text turns, owned
 by the UI (one list per thread), so the backend stays stateless across threads.
+
+Concurrency: each `query` runs on its own daemon worker thread, so multiple chat
+threads can stream answers in parallel. Requests are stateless and request-local
+state (sources, dedup sets) lives in closures per call. Only two things are
+genuinely shared — stdout and TEMP_STORES — and both are guarded by locks below.
 """
 from __future__ import annotations
 
 import json
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -36,12 +42,20 @@ from .threads import ThreadStore
 SESSION_ID = ""
 TEMP_STORES: dict[str, list[VectorStore]] = {}
 
+# stdout is written from many query threads at once; serialize whole lines so
+# events never interleave. TEMP_STORES is read by queries and mutated by the
+# temp-index handlers, so guard those accesses too.
+_emit_lock = threading.Lock()
+_stores_lock = threading.Lock()
+
 
 def emit(obj: dict) -> None:
     if SESSION_ID and "session_id" not in obj:
         obj = {"session_id": SESSION_ID, **obj}
-    sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
-    sys.stdout.flush()
+    line = json.dumps(obj, ensure_ascii=False) + "\n"
+    with _emit_lock:
+        sys.stdout.write(line)
+        sys.stdout.flush()
 
 
 def _index_stats(store: VectorStore | None) -> dict:
@@ -56,7 +70,8 @@ def _thread_stores(store: VectorStore | None, req: dict) -> list[VectorStore]:
     tid = req.get("threadId")
     stores = [store] if store is not None else []
     if tid:
-        stores.extend(TEMP_STORES.get(tid, []))
+        with _stores_lock:
+            stores.extend(TEMP_STORES.get(tid, []))
     return stores
 
 
@@ -83,7 +98,8 @@ def handle_temp_index(req: dict) -> None:
     for c in store.chunks:
         if not os.path.isabs(c.image_path):
             c.image_path = str(pages_dir / c.image_path)
-    TEMP_STORES.setdefault(tid, []).append(store)
+    with _stores_lock:
+        TEMP_STORES.setdefault(tid, []).append(store)
     emit({"type": "temp_indexed", "threadId": tid,
           "docs": sorted({c.doc for c in store.chunks}),
           "chunks": len(store)})
@@ -94,14 +110,16 @@ def handle_temp_index_clone(req: dict) -> None:
     dst = req.get("toThreadId")
     if not src or not dst:
         return
-    if src in TEMP_STORES:
-        TEMP_STORES[dst] = list(TEMP_STORES[src])
+    with _stores_lock:
+        if src in TEMP_STORES:
+            TEMP_STORES[dst] = list(TEMP_STORES[src])
 
 
 def handle_temp_index_clear(req: dict) -> None:
     tid = req.get("threadId")
     if tid:
-        TEMP_STORES.pop(tid, None)
+        with _stores_lock:
+            TEMP_STORES.pop(tid, None)
 
 
 def handle_query(store: VectorStore | None, req: dict) -> None:
@@ -305,6 +323,38 @@ def handle_query(store: VectorStore | None, req: dict) -> None:
           "sources": sources, "usage": u, "calculations": calcs, "model": model_name})
 
 
+def _warm_imports() -> None:
+    """Force first-time imports on the main thread, before any query workers
+    start. handle_query/handle_threads import `.llm` lazily, and openai loads its
+    `resources.chat`/`resources.embeddings` submodules on first client access — two
+    worker threads hitting those first-time imports at once deadlock on the import
+    lock ('deadlock detected by _ModuleLock(...openai.resources.chat)'). Importing
+    them once here, single-threaded, makes the later imports cheap no-ops."""
+    from . import llm  # noqa: F401  — pulls in openai, PIL, numpy
+    try:
+        import openai.resources.chat.completions  # noqa: F401
+        import openai.resources.embeddings  # noqa: F401
+    except Exception:  # best-effort warmup; real calls will surface any error
+        pass
+
+
+def _run_query(store: VectorStore | None, req: dict) -> None:
+    """Worker-thread entry point: run one query to completion, reporting any
+    failure as an error event so a single bad request never takes the loop down."""
+    try:
+        handle_query(store, req)
+    except Exception as e:  # report, keep serving
+        emit({"type": "error", "reqId": req.get("reqId"), "message": str(e)})
+
+
+def _dispatch_query(store: VectorStore | None, req: dict) -> None:
+    """Hand a query off to its own daemon thread and return immediately, so the
+    stdin loop can keep reading and other threads can stream in parallel. `store`
+    is captured here so a later reload/doc_remove can't swap the index mid-answer."""
+    threading.Thread(target=_run_query, args=(store, req),
+                     name=f"query-{req.get('reqId') or '?'}", daemon=True).start()
+
+
 def _append_calc_appendix(ans: str, calcs: list) -> str:
     """Append a 'Calculations' section listing any calc not already cited in the
     answer prose, numbered by its index so the renderer's [n] markers line up.
@@ -406,6 +456,8 @@ def main(argv=None) -> int:
     except FileNotFoundError:
         store = None  # no PDF index yet — threads/settings still work; queries error
 
+    _warm_imports()
+
     emit({"type": "ready", **_index_stats(store)})
 
     for raw in sys.stdin:
@@ -461,10 +513,9 @@ def main(argv=None) -> int:
                 emit({"type": "error", "reqId": req.get("reqId"),
                       "message": "No index found. Add PDFs to build the index first."})
                 continue
-            try:
-                handle_query(store, req)
-            except Exception as e:  # report, keep serving
-                emit({"type": "error", "reqId": req.get("reqId"), "message": str(e)})
+            # Run on a worker thread so the loop stays free to read more
+            # requests — multiple threads stream answers concurrently.
+            _dispatch_query(store, req)
         elif kind in ("threads_dump", "thread_upsert", "thread_delete",
                       "thread_search", "title_suggest"):
             try:

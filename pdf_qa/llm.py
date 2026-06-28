@@ -97,7 +97,12 @@ def summarize_title(question: str, answer: str) -> str:
     fall back to a placeholder."""
     client = _chat_client()
     model = f"openai/{config.SUMMARY_MODEL}" if config.USE_OPENROUTER else config.SUMMARY_MODEL
-    convo = f"User: {question.strip()[:800]}\n\nAssistant: {answer.strip()[:800]}"
+    # The title is generated as soon as the first question is sent, so `answer`
+    # is usually empty — title from the question alone, and only include the
+    # assistant turn when one was actually provided.
+    convo = f"User: {question.strip()[:800]}"
+    if answer.strip():
+        convo += f"\n\nAssistant: {answer.strip()[:800]}"
     try:
         kw: dict = {"model": model, "max_tokens": 20,
                     "messages": [{"role": "system", "content": _TITLE_SYSTEM},

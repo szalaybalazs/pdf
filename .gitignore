@@ -4,6 +4,10 @@ __pycache__/
 *.pyc
 build/
 dist/
+
+# app/build holds electron-builder buildResources (icons, entitlements) — keep tracked
+!app/build/
+!app/build/**
 *.spec.bak
 .signing/
 *.pfx

@@ -5,6 +5,6 @@ numpy>=1.24.0
 Pillow>=10.0.0
 tqdm>=4.66.0
 python-dotenv>=1.0.0
-pytesseract>=0.3.10   # OCR fallback; also requires the Tesseract binary (brew/apt install tesseract)
+pytesseract>=0.3.10   # OCR fallback; wraps the Tesseract binary. Packaged builds bundle it (scripts/vendor-tesseract.sh); for dev, brew/apt install tesseract
 sympy>=1.12           # exact arithmetic for the calculate tool
 pint>=0.23            # unit-aware calculations

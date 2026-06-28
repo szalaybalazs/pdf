@@ -27,5 +27,10 @@ rm -rf "$STAGE"
 mkdir -p "$STAGE"
 cp -R "$ROOT/dist/pdf-qa-backend/." "$STAGE/"
 
+# Bundle a self-contained Tesseract engine next to the frozen backend so OCR
+# works with no system install (see scripts/vendor-tesseract.sh). Skippable via
+# PDF_QA_SKIP_TESSERACT=1.
+bash "$ROOT/scripts/vendor-tesseract.sh" "$STAGE/tesseract"
+
 echo "==> Done. Frozen backend staged at app/backend-dist/"
 ls -1 "$STAGE" | sed 's/^/    /'

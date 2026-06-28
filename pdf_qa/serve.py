@@ -379,6 +379,27 @@ def main(argv=None) -> int:
     SESSION_ID = uuid.uuid4().hex[:12]
     print(f"pdf_qa backend session_id={SESSION_ID}", file=sys.stderr, flush=True)
 
+    # Report OCR availability at startup so packaging/bundling issues are obvious
+    # in the logs (main.ts mirrors backend stderr into <userData>/main.log).
+    from . import ocr
+    if ocr.available():
+        print(f"pdf_qa OCR: tesseract available at {ocr.binary_path()}", file=sys.stderr, flush=True)
+    else:
+        # Fail loudly: a missing engine silently degrades retrieval on scanned
+        # PDFs, so make it impossible to miss in the logs. The "OCR UNAVAILABLE"
+        # marker is what main.ts elevates to error level.
+        bar = "!" * 64
+        for line in (
+            bar,
+            "pdf_qa OCR UNAVAILABLE — tesseract binary not found.",
+            "Scanned / no-text-layer PDF pages will have NO searchable text.",
+            "Packaged build: the bundled engine (Resources/backend/tesseract/) is",
+            "missing or broken — check scripts/vendor-tesseract.sh ran at build time.",
+            "Dev: install tesseract (brew/apt) or set PDF_QA_TESSERACT=/path/to/tesseract.",
+            bar,
+        ):
+            print(line, file=sys.stderr, flush=True)
+
     tstore = ThreadStore(config.DB_PATH)
     try:
         store = VectorStore.load(config.STORE_PATH)

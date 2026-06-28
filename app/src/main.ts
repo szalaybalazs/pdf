@@ -273,7 +273,13 @@ function startBackend(): void {
     stderrTail = (stderrTail + d.toString()).slice(-2000);
     const parts = errBuf.split("\n");
     errBuf = parts.pop() || "";
-    for (const p of parts) if (p.trim()) { log("warn", "backend stderr", preview(p, 500)); emitLog(p); }
+    for (const p of parts) if (p.trim()) {
+      // Elevate the loud OCR-unavailable banner from the backend to error level
+      // so a missing/broken bundled tesseract stands out in the logs.
+      const level = /OCR UNAVAILABLE/i.test(p) ? "error" : "warn";
+      log(level, "backend stderr", preview(p, 500));
+      emitLog(p);
+    }
   });
 
   serve.on("error", (e: Error) => {

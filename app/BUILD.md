@@ -23,6 +23,23 @@ python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt pyinstaller
 ```
 
+### Bundled Tesseract (OCR engine)
+`build:backend` runs `scripts/vendor-tesseract.sh`, which stages a self-contained
+Tesseract next to the frozen backend (`app/backend-dist/tesseract/`) so OCR works
+with **no system install** on the user's machine. It vendors only for the host
+platform (PyInstaller can't cross-compile anyway):
+
+- **macOS** — uses Homebrew + `dylibbundler` (both auto-installed if missing),
+  relocating dylibs to `@executable_path/libs`. The engine is signed/notarized as
+  part of the normal `electron-builder` pass (it lives under `Contents/Resources`).
+- **Windows** — downloads the pinned UB-Mannheim installer and extracts it with
+  **7-Zip**, which must be on PATH (`choco install 7zip` or `winget install 7zip.7zip`).
+  Bump the version via `WIN_TESS_VERSION` / `WIN_TESS_URL`.
+
+Languages bundled default to `eng osd`; override with `PDF_QA_BUNDLE_LANGS="eng deu …"`
+(must match `OCR_LANG` at runtime). Set `PDF_QA_SKIP_TESSERACT=1` to skip vendoring
+(OCR then falls back to a system `tesseract` on PATH, if any).
+
 ### macOS code-signing & notarization
 You need an Apple Developer account and a **Developer ID Application** certificate.
 

@@ -12,7 +12,9 @@ import { EventEmitter } from "events";
 import * as readline from "readline";
 import * as path from "path";
 import * as fs from "fs";
+import * as os from "os";
 import { createIPCHandler } from "electron-trpc/main";
+import logger from "electron-log/main";
 import { readSettings, writeSettings, Settings } from "./settings";
 import { createAppRouter, RouterDeps } from "./trpc";
 import { checkForUpdates, initAutoUpdater, installDownloadedUpdate, getUpdateState } from "./updater";
@@ -52,38 +54,66 @@ function backendCommand(sub: "serve" | "ingest", extra: string[] = []): {
 }
 
 // --- debug logging ----------------------------------------------------------
-// Everything the main process does is timestamped to the console *and* appended
-// to <userData>/main.log, so issues can be diagnosed after the fact. Set
-// PDF_QA_DEBUG=0 to silence the verbose per-event lines (errors always log).
+// electron-log handles the console + file sinks and rotation for us. On macOS
+// the file lands in ~/Library/Logs/<App>/main.log, which Console.app reads. We
+// override the file/console format to the classic syslog line
+// `MMM D HH:MM:SS host PROC[pid]: message` so Console parses the timestamp,
+// host and process columns. Set PDF_QA_DEBUG=0 to silence verbose info lines
+// (warnings and errors always log).
 const DEBUG = process.env.PDF_QA_DEBUG !== "0";
-let logStream: fs.WriteStream | null = null;
+const LOG_HOST = os.hostname().split(".")[0];
+const LOG_PROC = `${APP_NAME}[${process.pid}]`;
+
+const SYSLOG_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                       "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** Syslog timestamp: `Jun  8 09:04:01` (day space-padded to width 2). */
+function syslogTimestamp(d: Date): string {
+  const day = String(d.getDate()).padStart(2, " ");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  const ss = String(d.getSeconds()).padStart(2, "0");
+  return `${SYSLOG_MONTHS[d.getMonth()]} ${day} ${hh}:${mm}:${ss}`;
+}
+
+// Render every electron-log message as a single syslog/ASL line. The leading
+// `MMM D HH:MM:SS host PROC[pid]:` prefix is what Console keys off of; the
+// `[main] [level] …` text after the colon is the free-form message.
+// Return a single-element array, not a string: the console transport runs
+// further style transforms over the result and calls data.reduce on it.
+const syslogFormat = ({ message }: { message: { date: Date; level: string; data: unknown[] } }): string[] => {
+  const text = message.data
+    .map((d) => (typeof d === "string" ? d : JSON.stringify(d)))
+    .join(" ");
+  return [`${syslogTimestamp(message.date)} ${LOG_HOST} ${LOG_PROC}: [main] [${message.level}] ${text}`];
+};
+
+logger.transports.file.fileName = "main.log";
+logger.transports.file.format = syslogFormat as never;
+logger.transports.console.format = syslogFormat as never;
+const logLevel = DEBUG ? "info" : "warn";
+logger.transports.file.level = logLevel;
+logger.transports.console.level = logLevel;
 
 function logFilePath(): string | null {
-  try { return path.join(app.getPath("userData"), "main.log"); }
+  try { return logger.transports.file.getFile().path; }
   catch { return null; }   // app not ready yet
 }
 
 function openLog(): void {
-  const p = logFilePath();
-  if (!p || logStream) return;
-  try {
-    logStream = fs.createWriteStream(p, { flags: "a" });
-    log("info", `=== session start · ${new Date().toISOString()} · python=${PYTHON} ===`);
-    log("info", `log file: ${p}`);
-  } catch { /* console-only if the file can't be opened */ }
+  log("info", `=== session start · ${new Date().toISOString()} · python=${PYTHON} ===`);
+  log("info", `log file: ${logFilePath()}`);
 }
 
 function log(level: "info" | "warn" | "error", msg: string, extra?: unknown): void {
-  if (level === "info" && !DEBUG) return;
-  const ts = new Date().toISOString();
-  let line = `[${ts}] [main] [${level}] ${msg}`;
   if (extra !== undefined) {
-    try { line += " " + (typeof extra === "string" ? extra : JSON.stringify(extra)); }
-    catch { line += " [unserialisable]"; }
+    let tail: string;
+    try { tail = typeof extra === "string" ? extra : JSON.stringify(extra); }
+    catch { tail = "[unserialisable]"; }
+    logger[level](`${msg} ${tail}`);
+  } else {
+    logger[level](msg);
   }
-  const sink = level === "error" ? console.error : console.log;
-  sink(line);
-  try { logStream?.write(line + "\n"); } catch { /* ignore */ }
 }
 
 async function openLogsAction(): Promise<void> {

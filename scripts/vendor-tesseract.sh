@@ -65,8 +65,10 @@ vendor_macos() {
 # ----------------------------------------------------------------------------
 vendor_windows() {
   echo "==> Vendoring Tesseract for Windows ($WIN_TESS_VERSION)"
-  command -v 7z >/dev/null 2>&1 || command -v 7z.exe >/dev/null 2>&1 || {
-    echo "ERROR: 7-Zip (7z) required to extract the installer. Install via 'choco install 7zip' or 'winget install 7zip.7zip'." >&2
+  local sevenzip
+  sevenzip="$(command -v 7z || command -v 7z.exe || command -v 7zz || true)"
+  [ -n "$sevenzip" ] || {
+    echo "ERROR: 7-Zip required to extract the installer. Install via 'choco install 7zip' or 'winget install 7zip.7zip'." >&2
     exit 1
   }
   local tmp installer extract
@@ -76,7 +78,7 @@ vendor_windows() {
 
   echo "    downloading $WIN_TESS_URL"
   curl -fL --retry 3 -o "$installer" "$WIN_TESS_URL"
-  7z x -y -o"$extract" "$installer" >/dev/null
+  "$sevenzip" x -y -o"$extract" "$installer" >/dev/null
 
   [ -f "$extract/tesseract.exe" ] || { echo "ERROR: tesseract.exe not found after extraction" >&2; exit 1; }
   cp "$extract/tesseract.exe" "$DEST/tesseract.exe"

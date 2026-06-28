@@ -23,13 +23,13 @@
     "invalidate": "cross-env AWS_PROFILE=personal bash ../scripts/invalidate-cloudfront.sh"
   },
   "devDependencies": {
-    "electron-builder": "^25.1.8",
-    "cross-env": "^7.0.3",
     "@tailwindcss/cli": "^4.3.1",
     "@types/node": "^20.11.0",
     "@types/react": "^18.3.31",
     "@types/react-dom": "^18.3.7",
+    "cross-env": "^7.0.3",
     "electron": "^30.0.0",
+    "electron-builder": "^25.1.8",
     "esbuild": "^0.28.1",
     "jsdom": "^29.1.1",
     "tailwindcss": "^4.3.1",
@@ -43,6 +43,7 @@
   "dependencies": {
     "@trpc/client": "^10.45.4",
     "@trpc/server": "^10.45.4",
+    "electron-log": "^5.4.4",
     "electron-trpc": "^0.7.1",
     "electron-updater": "^6.3.9",
     "react": "^18.3.1",

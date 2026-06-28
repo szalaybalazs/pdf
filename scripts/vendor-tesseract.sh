@@ -25,7 +25,10 @@ LANGS="${PDF_QA_BUNDLE_LANGS:-eng osd}"
 
 # Pinned Windows engine (UB-Mannheim). Override WIN_TESS_VERSION / WIN_TESS_URL
 # to bump. The asset is the NSIS installer; we extract it rather than run it.
-WIN_TESS_VERSION="${WIN_TESS_VERSION:-5.5.0.20241111}"
+# NOTE: must be a version that exists as a GitHub *release* asset (the newest
+# such is v5.4.0.20240606 — later builds live only on digi.bib.uni-mannheim.de;
+# point WIN_TESS_URL there if you bump past it).
+WIN_TESS_VERSION="${WIN_TESS_VERSION:-5.4.0.20240606}"
 WIN_TESS_URL="${WIN_TESS_URL:-https://github.com/UB-Mannheim/tesseract/releases/download/v${WIN_TESS_VERSION}/tesseract-ocr-w64-setup-${WIN_TESS_VERSION}.exe}"
 
 if [ "${PDF_QA_SKIP_TESSERACT:-0}" = "1" ]; then

@@ -51,7 +51,7 @@ export function Settings() {
 
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-ink/30 backdrop-blur-[2px]"
+      className="modal-scrim fixed inset-0 z-[100] flex items-center justify-center backdrop-blur-[2px]"
       onClick={(e) => { if (e.target === e.currentTarget) closeSettings(); }}
     >
       <div className="flex max-h-[calc(100vh-48px)] w-[520px] max-w-[calc(100vw-48px)] flex-col overflow-y-auto rounded-2xl border border-border-strong bg-bg p-6 shadow-[0_8px_30px_rgba(20,20,18,0.18)]">
@@ -113,7 +113,7 @@ export function Settings() {
             onClick={closeSettings}
           >Cancel</button>
           <button
-            className="rounded-lg border border-ink bg-ink px-4 py-2 text-[13px] font-medium text-white transition hover:opacity-90 disabled:opacity-50"
+            className="rounded-lg border border-tint bg-tint px-4 py-2 text-[13px] font-medium text-white transition hover:opacity-90 disabled:opacity-50"
             onClick={save} disabled={saving}
           >Save</button>
         </div>

@@ -33,6 +33,26 @@
 }
 
 @layer base {
+  :root { color-scheme: light; }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --color-bg: #171717;
+      --color-surface: #202123;
+      --color-surface-2: #2b2c2f;
+      --color-surface-3: #3a3b3f;
+      --color-border: #303136;
+      --color-border-strong: #46474d;
+      --color-ink: #f2f2f0;
+      --color-muted: #b4b4bb;
+      --color-faint: #85858e;
+      --color-tint: #19c89a;
+      --color-tint-soft: #12382f;
+      --color-tint-strong: #6ee7c4;
+      --color-danger: #ff8a7a;
+      --color-amber: #f3bd5b;
+    }
+  }
   html, body { height: 100%; margin: 0; }
   body {
     background: var(--color-bg); color: var(--color-ink);
@@ -41,8 +61,8 @@
   }
   ::-webkit-scrollbar { width: 10px; height: 10px; }
   ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: #dcdcd9; border-radius: 6px; border: 3px solid transparent; background-clip: padding-box; }
-  ::-webkit-scrollbar-thumb:hover { background: #c6c6c2; background-clip: padding-box; }
+  ::-webkit-scrollbar-thumb { background: var(--color-surface-3); border-radius: 6px; border: 3px solid transparent; background-clip: padding-box; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--color-border-strong); background-clip: padding-box; }
 }
 
 .app-drag { -webkit-app-region: drag; }
@@ -54,6 +74,13 @@
 }
 .composer-shell {
   box-shadow: 0 1px 2px rgba(20, 20, 18, .04), 0 14px 42px rgba(20, 20, 18, .08);
+}
+.modal-scrim { background: rgba(20, 20, 18, .30); }
+@media (prefers-color-scheme: dark) {
+  .composer-shell {
+    box-shadow: 0 1px 2px rgba(0, 0, 0, .28), 0 14px 42px rgba(0, 0, 0, .34);
+  }
+  .modal-scrim { background: rgba(0, 0, 0, .48); }
 }
 
 /* --- animations shared by streaming cursor / pending bullet / spinner ------- */
@@ -134,7 +161,7 @@
 /* inline calculation markers inside the answer prose */
 .calc-mark { border-radius: 4px; padding: 0 3px; cursor: help; }
 .calc-mark.verified { background: var(--color-tint-soft); box-shadow: inset 0 -1px 0 var(--color-tint); }
-.calc-mark.unverified { background: #fbf1dd; box-shadow: inset 0 -1px 0 var(--color-amber); }
+.calc-mark.unverified { background: color-mix(in srgb, var(--color-amber) 20%, var(--color-bg)); box-shadow: inset 0 -1px 0 var(--color-amber); }
 .calc-idx { font-size: 0.65em; font-weight: 700; margin-left: 1px; opacity: 0.7; }
 .calc-mark.verified .calc-idx { color: var(--color-tint); }
 .calc-mark.unverified .calc-idx { color: var(--color-amber); }

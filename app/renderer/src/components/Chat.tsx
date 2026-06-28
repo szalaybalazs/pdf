@@ -145,7 +145,7 @@ function Composer() {
           disabled={noDocsEnabled}
         />
         <button
-          className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full bg-ink text-white transition hover:opacity-85 active:scale-95 disabled:cursor-not-allowed disabled:bg-surface-3 disabled:text-faint"
+          className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full bg-tint text-white transition hover:opacity-85 active:scale-95 disabled:cursor-not-allowed disabled:bg-surface-3 disabled:text-faint"
           onClick={submit} disabled={busy || noDocsEnabled || !value.trim()} title={noDocsEnabled ? "Enable at least one document" : "Send"}
         >
           {busy ? (

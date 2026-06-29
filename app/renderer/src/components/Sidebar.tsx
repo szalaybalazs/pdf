@@ -85,6 +85,15 @@ function DownloadIcon() {
   );
 }
 
+function BranchIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M6 3v6a6 6 0 0 0 6 6h6"></path>
+      <path d="m15 12 3 3-3 3"></path>
+    </svg>
+  );
+}
+
 /** Shows download progress, then a "Restart to update" action once an update has
  *  finished downloading in the background. Hidden when no update is pending. */
 function UpdateBanner() {
@@ -170,6 +179,7 @@ export function Sidebar() {
         {searching && threads.length === 0 && <li className="px-2.5 py-2 text-[12.5px] text-faint">No matching chats</li>}
         {threads.map((t) => {
           const active = t.id === store.activeId;
+          const threadedOff = !!t.branchedFromThreadId || /\s↳ branch$/.test(t.title);
           return (
             <li
               key={t.id}
@@ -177,6 +187,11 @@ export function Sidebar() {
               onClick={() => selectThread(t.id)}
             >
               {t.busy && <SidebarSpinner />}
+              {!t.busy && threadedOff && (
+                <span className="shrink-0 text-faint" title="Threaded off from another chat">
+                  <BranchIcon />
+                </span>
+              )}
               <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{t.title}</span>
               <button
                 className="flex h-[20px] w-[20px] items-center justify-center rounded text-faint opacity-0 transition-opacity hover:!text-danger hover:bg-surface-2 group-hover:opacity-70"

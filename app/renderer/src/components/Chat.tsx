@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
-  store, activeThread, send, setDebug, setModel, enabledDocs,
+  store, activeThread, send, showModelMenu, enabledDocs,
   addTempPdfsToThread, threadDocs,
 } from "../store";
 import { Assistant } from "./Assistant";
@@ -116,6 +116,7 @@ function Composer() {
   const enabledDocCount = enabledDocs(t).length;
   const docCount = threadDocs(t).length;
   const noDocsEnabled = docCount > 0 && enabledDocCount === 0;
+  const selectedModel = store.models.find((m) => m.id === store.selectedModel);
 
   const autosize = () => {
     const el = ref.current;
@@ -160,15 +161,15 @@ function Composer() {
 
       {/* controls under the input: model · debug · session tokens */}
       <div className="mt-2 flex w-full max-w-[780px] flex-wrap items-center gap-3">
-        <select
-          className="cursor-pointer rounded-md border border-transparent bg-surface px-2.5 py-1 font-mono text-[12px] text-muted outline-none transition hover:bg-surface-2 hover:text-ink focus:border-border-strong"
-          title="Answer model" value={store.selectedModel} onChange={(e) => setModel(e.target.value)}
+        <button
+          className="max-w-full cursor-pointer truncate px-0 py-1 text-left font-mono text-[12px] text-muted outline-none transition hover:text-ink focus:text-ink disabled:cursor-default disabled:opacity-60"
+          title="Answer model"
+          disabled={!store.models.length}
+          onClick={() => { void showModelMenu(); }}
         >
-          {store.models.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
-        </select>
-        <label className="flex cursor-pointer select-none items-center gap-1.5 font-mono text-[12px] text-muted">
-          <input type="checkbox" className="accent-tint" checked={store.debug} onChange={(e) => setDebug(e.target.checked)} /> debug
-        </label>
+          {selectedModel?.label || "Model"}
+        </button>
+        <span className="flex-1" />
         {docCount > 0 && (
           <span className={`font-mono text-[11.5px] ${noDocsEnabled ? "text-danger" : "text-faint"}`} title="Documents searched by this chat">
             {enabledDocCount}/{docCount} docs

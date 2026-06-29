@@ -30,15 +30,17 @@ def _anthropic_client():
     return Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
 
-def _local_client():
+def _local_client(spec: dict | None = None):
     from openai import OpenAI
-    if not config.LOCAL_BASE_URL:
+    base_url = (spec or {}).get("base_url") or config.LOCAL_BASE_URL
+    api_key = (spec or {}).get("api_key") or config.LOCAL_API_KEY or "local"
+    if not base_url:
         raise RuntimeError(
             "LOCAL_BASE_URL is not set. Point it at your local server (e.g. "
             "http://localhost:11434/v1 for Ollama) and set LOCAL_MODEL, or pick a "
             "different model in the UI."
         )
-    return OpenAI(api_key=config.LOCAL_API_KEY or "local", base_url=config.LOCAL_BASE_URL)
+    return OpenAI(api_key=api_key, base_url=base_url)
 
 
 def _chat_client(spec: dict | None = None):
@@ -47,7 +49,7 @@ def _chat_client(spec: dict | None = None):
     direct OpenAI API. (Embeddings always use the direct OpenAI client via
     _client() — neither OpenRouter nor local servers serve our embedding model.)"""
     if spec and spec.get("provider") == "local":
-        return _local_client()
+        return _local_client(spec)
     if spec and spec.get("direct"):
         return _client()   # force direct OpenAI even when OpenRouter is globally on
     if config.USE_OPENROUTER:

@@ -14,7 +14,7 @@ export interface AnswerEvent {
   usage: Usage; calculations?: Calc[]; model?: string;
 }
 export interface DeltaEvent { type: "delta"; reqId?: string; text: string; }
-export interface ModelOption { id: string; label: string; }
+export interface ModelOption { id: string; label: string; provider?: string; model?: string; via_openrouter?: boolean; }
 export interface ReadyEvent {
   type: "ready"; docs: string[]; chunks: number; vision_model: string; embed_model: string;
   models?: ModelOption[]; default_model?: string;
@@ -58,6 +58,8 @@ export interface Thread {
   history: { role: "user" | "assistant"; content: string }[];
   disabledDocs?: string[];
   tempDocs?: string[];
+  branchedFromThreadId?: string;
+  branchedFromReqId?: string;
   busy: boolean;
 }
 

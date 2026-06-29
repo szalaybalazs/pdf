@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 
 try:
@@ -98,9 +99,47 @@ CLAUDE_CLI_MODEL = os.getenv("CLAUDE_CLI_MODEL", "")   # "" = the CLI's default 
 # Embeddings still use OPENAI_API_KEY: the index is built with OpenAI vectors and
 # can't be queried by a different embedder, so only answering goes local here.
 # Common base URLs: Ollama http://localhost:11434/v1 · LM Studio http://localhost:1234/v1
-LOCAL_BASE_URL = os.getenv("LOCAL_BASE_URL", "")       # "" disables the local option
+DEFAULT_LOCAL_BASE_URL = "http://localhost:11434/v1"
+LOCAL_BASE_URL = os.getenv("LOCAL_BASE_URL", "")       # blank local rows fall back to Ollama's default
 LOCAL_API_KEY = os.getenv("LOCAL_API_KEY", "local")    # most local servers ignore it
 LOCAL_MODEL = os.getenv("LOCAL_MODEL", "")             # e.g. "qwen2.5-vl" — server's model id
+LOCAL_MODELS_RAW = os.getenv("LOCAL_MODELS", "")       # JSON: [{base_url, api_key, model}]
+
+
+def _local_model_specs() -> dict[str, dict]:
+    """Configured local OpenAI-compatible answerers.
+
+    The desktop app writes LOCAL_MODELS as a JSON array. Keep the old single
+    LOCAL_BASE_URL/LOCAL_MODEL env vars as a migration path for CLI users and
+    older settings files.
+    """
+    entries: list[dict] = []
+    if LOCAL_MODELS_RAW.strip():
+        try:
+            parsed = json.loads(LOCAL_MODELS_RAW)
+            if isinstance(parsed, list):
+                entries.extend(x for x in parsed if isinstance(x, dict))
+        except Exception:
+            entries = []
+    if not entries and LOCAL_MODEL:
+        entries.append({"base_url": LOCAL_BASE_URL or DEFAULT_LOCAL_BASE_URL,
+                        "api_key": LOCAL_API_KEY, "model": LOCAL_MODEL})
+
+    out: dict[str, dict] = {}
+    seen: dict[str, int] = {}
+    for item in entries:
+        base_url = str(item.get("base_url") or item.get("baseUrl") or LOCAL_BASE_URL or DEFAULT_LOCAL_BASE_URL).strip()
+        model = str(item.get("model") or "").strip()
+        api_key = str(item.get("api_key") or item.get("apiKey") or "local").strip() or "local"
+        if not model:
+            continue
+        base_id = "local-" + "".join(ch if ch.isalnum() else "-" for ch in model.lower()).strip("-")
+        base_id = base_id or "local"
+        seen[base_id] = seen.get(base_id, 0) + 1
+        mid = base_id if seen[base_id] == 1 else f"{base_id}-{seen[base_id]}"
+        out[mid] = {"label": f"Local · {model}", "provider": "local",
+                    "model": model, "openrouter": "", "base_url": base_url, "api_key": api_key}
+    return out
 
 # Selectable answerer models offered in the UI. Each id maps to a provider, the
 # native model id, and the OpenRouter slug. The renderer builds its picker from
@@ -115,12 +154,10 @@ MODELS = {
     "sonnet":    {"label": f"Anthropic · Sonnet{_via}",               "provider": "anthropic", "model": ANTHROPIC_SONNET_MODEL, "openrouter": f"anthropic/{ANTHROPIC_SONNET_MODEL}"},
     "claude-cli": {"label": "Local · claude -p (text only)",          "provider": "cli",       "model": CLAUDE_CLI_MODEL,      "openrouter": ""},
 }
-# Local OpenAI-compatible answerer — only offered when LOCAL_BASE_URL + LOCAL_MODEL
-# are configured, so the picker never shows a dead option. `provider` "local"
-# selects the local-client code path; OpenRouter routing never applies to it.
-if LOCAL_BASE_URL and LOCAL_MODEL:
-    MODELS["local"] = {"label": f"Local · {LOCAL_MODEL}", "provider": "local",
-                       "model": LOCAL_MODEL, "openrouter": ""}
+# Local OpenAI-compatible answerers — only offered when base URL + model are
+# configured, so the picker never shows dead options. `provider` "local" selects
+# the local-client code path; OpenRouter routing never applies to these.
+MODELS.update(_local_model_specs())
 # Direct-to-OpenAI GPT-5.5 — bypasses OpenRouter (uses OPENAI_API_KEY) even when
 # OpenRouter is globally enabled. The "direct" flag forces the native OpenAI path.
 # Only offered when OpenRouter is on; with it off, the "gpt55" entry above already

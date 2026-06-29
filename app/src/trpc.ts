@@ -14,7 +14,10 @@ import type { EventEmitter } from "events";
 export interface AppSettings {
   openaiKey: string; anthropicKey: string; openrouterKey: string; systemPrompt: string;
   localBaseUrl: string; localApiKey: string; localModel: string; dataDir?: string;
+  localModels: LocalModelSettings[];
 }
+export interface LocalModelSettings { baseUrl: string; apiKey: string; model: string; }
+export interface ModelMenuItem { id: string; label: string; provider?: string; model?: string; via_openrouter?: boolean; }
 
 // Auto-update state pushed to the renderer (drives the sidebar "Restart to
 // update" indicator). The download happens in the background; the renderer only
@@ -33,7 +36,7 @@ export interface RouterDeps {
   markServeSubscribed: () => void;
   sendToBackend: (req: unknown) => void;
   getSettings: () => Promise<AppSettings>;
-  setSettings: (s: { openaiKey: string; anthropicKey: string; openrouterKey: string; systemPrompt: string; localBaseUrl: string; localApiKey: string; localModel: string }) => Promise<{ ok: boolean }>;
+  setSettings: (s: { openaiKey: string; anthropicKey: string; openrouterKey: string; systemPrompt: string; localBaseUrl: string; localApiKey: string; localModel: string; localModels: LocalModelSettings[] }) => Promise<{ ok: boolean }>;
   openFigure: (filePath: string) => Promise<string>;
   openDoc: (name: string) => Promise<string>;
   removeDoc: (name: string) => Promise<void>;
@@ -41,6 +44,7 @@ export interface RouterDeps {
   addTempPdfs: (input: { threadId: string; filePaths: string[] }) => Promise<{ ok: boolean; docs: string[] }>;
   exportPdf: (input: { html: string; title: string }) => Promise<string>;
   showDocMenu: (name: string) => Promise<void>;
+  showModelMenu: (input: { models: ModelMenuItem[]; selectedModel: string }) => Promise<string | null>;
   getUpdateState: () => UpdateState | null;   // current update state for late subscribers
   installUpdate: () => boolean;               // quit + install; false = dev no-op
 }
@@ -55,6 +59,11 @@ const keys = z.object({
   localBaseUrl: z.string(),
   localApiKey: z.string(),
   localModel: z.string(),
+  localModels: z.array(z.object({
+    baseUrl: z.string(),
+    apiKey: z.string(),
+    model: z.string(),
+  })).default([]),
 });
 
 export function createAppRouter(deps: RouterDeps) {
@@ -74,6 +83,16 @@ export function createAppRouter(deps: RouterDeps) {
     exportPdf: t.procedure.input(z.object({ html: z.string(), title: z.string() }))
       .mutation(({ input }) => deps.exportPdf(input)),
     showDocMenu: t.procedure.input(z.string()).mutation(async ({ input }) => { await deps.showDocMenu(input); return true; }),
+    showModelMenu: t.procedure.input(z.object({
+      models: z.array(z.object({
+        id: z.string(),
+        label: z.string(),
+        provider: z.string().optional(),
+        model: z.string().optional(),
+        via_openrouter: z.boolean().optional(),
+      })),
+      selectedModel: z.string(),
+    })).mutation(({ input }) => deps.showModelMenu(input)),
     installUpdate: t.procedure.mutation(() => deps.installUpdate()),
 
     // --- streamed backend feeds --------------------------------------------

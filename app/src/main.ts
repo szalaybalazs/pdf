@@ -30,6 +30,7 @@ app.setName(APP_NAME);
 // project root = parent of the app/ directory (dist/ -> app/ -> project/)
 const PROJECT_ROOT = path.resolve(__dirname, "..", "..");
 const PYTHON = process.env.PDF_QA_PYTHON || "python3";
+const DEFAULT_LOCAL_BASE_URL = "http://localhost:11434/v1";
 
 // --- backend command resolution ---------------------------------------------
 // In development we run the Python source directly (`python3 -m pdf_qa.<sub>`).
@@ -260,11 +261,29 @@ function backendEnv(): NodeJS.ProcessEnv {
   if (settings.anthropicKey) env.ANTHROPIC_API_KEY = settings.anthropicKey;
   if (settings.openrouterKey) env.OPENROUTER_API_KEY = settings.openrouterKey;
   if (settings.systemPrompt.trim()) env.PDF_QA_SYSTEM_PROMPT = settings.systemPrompt;
-  // Local OpenAI-compatible server (Ollama, LM Studio, …). The backend only
-  // offers the "local" answerer when both base URL and model are set.
-  if (settings.localBaseUrl.trim()) env.LOCAL_BASE_URL = settings.localBaseUrl.trim();
-  if (settings.localApiKey.trim()) env.LOCAL_API_KEY = settings.localApiKey.trim();
-  if (settings.localModel.trim()) env.LOCAL_MODEL = settings.localModel.trim();
+  // Local OpenAI-compatible server (Ollama, LM Studio, …). The backend offers
+  // local answerers when a model is set. Blank row URLs fall back to Ollama's
+  // OpenAI-compatible default; each row can still override it.
+  const localModels = (settings.localModels || [])
+    .map((m) => ({
+      base_url: m.baseUrl.trim() || settings.localBaseUrl.trim() || DEFAULT_LOCAL_BASE_URL,
+      api_key: m.apiKey.trim() || "local",
+      model: m.model.trim(),
+    }))
+    .filter((m) => m.model);
+  if (!localModels.length && settings.localModel.trim()) {
+    localModels.push({
+      base_url: settings.localBaseUrl.trim() || DEFAULT_LOCAL_BASE_URL,
+      api_key: settings.localApiKey.trim() || "local",
+      model: settings.localModel.trim(),
+    });
+  }
+  if (localModels.length) {
+    env.LOCAL_MODELS = JSON.stringify(localModels);
+    env.LOCAL_BASE_URL = localModels[0].base_url;
+    env.LOCAL_API_KEY = localModels[0].api_key;
+    env.LOCAL_MODEL = localModels[0].model;
+  }
   return env;
 }
 
@@ -547,6 +566,74 @@ async function showDocMenuAction(name: string): Promise<void> {
   menu.popup({ window: win ?? undefined });
 }
 
+function modelProviderLabel(provider: string): string {
+  switch (provider) {
+    case "openai": return "OpenAI";
+    case "anthropic": return "Anthropic";
+    case "local": return "Local";
+    case "cli": return "Local CLI";
+    default: return provider ? provider[0].toUpperCase() + provider.slice(1) : "Other";
+  }
+}
+
+function modelMenuLabel(model: { label: string; model?: string; provider?: string }): string {
+  const provider = modelProviderLabel(model.provider || "");
+  const prefix = `${provider} · `;
+  if (model.label.startsWith(prefix)) return model.label.slice(prefix.length).replace(/ · OpenRouter$/, "");
+  return model.model || model.label;
+}
+
+async function showModelMenuAction(input: {
+  models: { id: string; label: string; provider?: string; model?: string; via_openrouter?: boolean }[];
+  selectedModel: string;
+}): Promise<string | null> {
+  log("info", "model-menu", preview(input));
+  if (!input.models.length) return null;
+  return new Promise((resolve) => {
+    let picked: string | null = null;
+    const providers: { label: string; models: typeof input.models }[] = [];
+    const openRouterProviders: { label: string; models: typeof input.models }[] = [];
+    for (const model of input.models) {
+      const label = modelProviderLabel(model.provider || model.label.split("·")[0]?.trim() || "");
+      const target = model.via_openrouter ? openRouterProviders : providers;
+      let group = target.find((p) => p.label === label);
+      if (!group) {
+        group = { label, models: [] };
+        target.push(group);
+      }
+      group.models.push(model);
+    }
+    const modelItems = (group: { models: typeof input.models }) => group.models.map((model) => ({
+      label: modelMenuLabel(model),
+      type: "radio",
+      checked: model.id === input.selectedModel,
+      click: () => {
+        picked = model.id;
+        resolve(picked);
+      },
+    } as MenuItemConstructorOptions));
+    const template: MenuItemConstructorOptions[] = [];
+    if (openRouterProviders.length) {
+      template.push({
+        label: "OpenRouter",
+        submenu: openRouterProviders.map((group) => ({
+          label: group.label,
+          submenu: modelItems(group),
+        } as MenuItemConstructorOptions)),
+      });
+    }
+    template.push(...providers.map((group) => ({
+      label: group.label,
+      submenu: modelItems(group),
+    } as MenuItemConstructorOptions)));
+    const menu = Menu.buildFromTemplate(template);
+    menu.popup({
+      window: win ?? undefined,
+      callback: () => resolve(picked),
+    });
+  });
+}
+
 async function getSettingsAction() {
   return { ...readSettings(), dataDir: dataDir() };
 }
@@ -561,6 +648,11 @@ async function setSettingsAction(s: Settings): Promise<{ ok: boolean }> {
     localBaseUrl: s.localBaseUrl || "",
     localApiKey: s.localApiKey || "",
     localModel: s.localModel || "",
+    localModels: (s.localModels || []).map((m) => ({
+      baseUrl: m.baseUrl || "",
+      apiKey: m.apiKey || "",
+      model: m.model || "",
+    })),
   });
   restartBackend(); // respawn so the Python backend picks up the new keys
   return { ok: true };
@@ -713,6 +805,7 @@ const routerDeps: RouterDeps = {
   addTempPdfs: addTempPdfsAction,
   exportPdf: exportPdfAction,
   showDocMenu: showDocMenuAction,
+  showModelMenu: showModelMenuAction,
   getUpdateState,
   installUpdate: installDownloadedUpdate,
 };

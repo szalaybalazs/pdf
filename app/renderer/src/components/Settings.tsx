@@ -6,14 +6,20 @@ const labelCls = "mb-1.5 mt-2.5 text-[12px] font-medium text-muted";
 const inputCls = "w-full rounded-lg border border-border-strong bg-surface px-3 py-2.5 font-mono text-[13px] text-ink outline-none transition focus:border-tint focus:ring-[3px] focus:ring-tint/15";
 const textareaCls = "min-h-[120px] w-full resize-y rounded-lg border border-border-strong bg-surface px-3 py-2.5 text-[13px] leading-relaxed text-ink outline-none transition focus:border-tint focus:ring-[3px] focus:ring-tint/15";
 
+interface LocalModelForm {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+}
+const DEFAULT_LOCAL_BASE_URL = "http://localhost:11434/v1";
+const blankLocalModel = (): LocalModelForm => ({ baseUrl: DEFAULT_LOCAL_BASE_URL, apiKey: "", model: "" });
+
 export function Settings() {
   const [openai, setOpenai] = useState("");
   const [anthropic, setAnthropic] = useState("");
   const [openrouter, setOpenrouter] = useState("");
   const [systemPrompt, setSystemPrompt] = useState("");
-  const [localBaseUrl, setLocalBaseUrl] = useState("");
-  const [localApiKey, setLocalApiKey] = useState("");
-  const [localModel, setLocalModel] = useState("");
+  const [localModels, setLocalModels] = useState<LocalModelForm[]>([blankLocalModel()]);
   const [dataDir, setDataDir] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -25,21 +31,39 @@ export function Settings() {
       setAnthropic(s.anthropicKey || "");
       setOpenrouter(s.openrouterKey || "");
       setSystemPrompt(s.systemPrompt || "");
-      setLocalBaseUrl(s.localBaseUrl || "");
-      setLocalApiKey(s.localApiKey || "");
-      setLocalModel(s.localModel || "");
+      const models = s.localModels?.length
+        ? s.localModels
+        : (s.localBaseUrl || s.localApiKey || s.localModel
+          ? [{ baseUrl: s.localBaseUrl || "", apiKey: s.localApiKey || "", model: s.localModel || "" }]
+          : [blankLocalModel()]);
+      setLocalModels(models);
       setDataDir(s.dataDir || "");
     }).catch(() => { /* show empty form */ });
     return () => { alive = false; };
   }, []);
 
+  const updateLocalModel = (index: number, patch: Partial<LocalModelForm>) => {
+    setLocalModels((rows) => rows.map((row, i) => i === index ? { ...row, ...patch } : row));
+  };
+  const addLocalModel = () => {
+    setLocalModels((rows) => [...rows, blankLocalModel()]);
+  };
+  const removeLocalModel = (index: number) => {
+    setLocalModels((rows) => rows.filter((_, i) => i !== index));
+  };
+
   const save = async () => {
     setSaving(true);
     try {
+      const cleanedLocalModels = localModels
+        .map((m) => ({ baseUrl: m.baseUrl.trim(), apiKey: m.apiKey.trim(), model: m.model.trim() }))
+        .filter((m) => m.model);
+      const firstLocal = cleanedLocalModels[0] || { baseUrl: "", apiKey: "", model: "" };
       await api.setSettings({
         openaiKey: openai.trim(), anthropicKey: anthropic.trim(), openrouterKey: openrouter.trim(),
         systemPrompt: systemPrompt.trim(),
-        localBaseUrl: localBaseUrl.trim(), localApiKey: localApiKey.trim(), localModel: localModel.trim(),
+        localBaseUrl: firstLocal.baseUrl, localApiKey: firstLocal.apiKey, localModel: firstLocal.model,
+        localModels: cleanedLocalModels,
       });
       store.statusErr = false;
       store.status = "reconnecting to backend…";   // next "ready" overwrites this
@@ -89,17 +113,34 @@ export function Settings() {
           model to add it to the model picker. Pick a vision + tool-calling model (e.g. qwen2.5-vl) for full features.
         </div>
 
-        <label className={labelCls}>Base URL</label>
-        <input className={inputCls} type="text" autoComplete="off" spellCheck={false}
-          placeholder="http://localhost:11434/v1" value={localBaseUrl} onChange={(e) => setLocalBaseUrl(e.target.value)} />
+        {localModels.map((local, i) => (
+          <div className="mt-3 rounded-lg border border-border bg-surface p-3" key={i}>
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <div className="text-[12px] font-semibold text-ink">Local model {i + 1}</div>
+              <button
+                className="rounded-md border border-border-strong bg-bg px-2 py-1 text-[12px] text-muted transition hover:bg-surface-2 hover:text-ink"
+                onClick={() => removeLocalModel(i)}
+              >Remove</button>
+            </div>
 
-        <label className={labelCls}>Model</label>
-        <input className={inputCls} type="text" autoComplete="off" spellCheck={false}
-          placeholder="qwen2.5-vl" value={localModel} onChange={(e) => setLocalModel(e.target.value)} />
+            <label className={labelCls}>Base URL</label>
+            <input className={inputCls} type="text" autoComplete="off" spellCheck={false}
+              placeholder="http://localhost:11434/v1" value={local.baseUrl} onChange={(e) => updateLocalModel(i, { baseUrl: e.target.value })} />
 
-        <label className={labelCls}>API key (optional)</label>
-        <input className={inputCls} type="password" autoComplete="off" spellCheck={false}
-          placeholder="local" value={localApiKey} onChange={(e) => setLocalApiKey(e.target.value)} />
+            <label className={labelCls}>Model</label>
+            <input className={inputCls} type="text" autoComplete="off" spellCheck={false}
+              placeholder="qwen2.5-vl" value={local.model} onChange={(e) => updateLocalModel(i, { model: e.target.value })} />
+
+            <label className={labelCls}>API key (optional)</label>
+            <input className={inputCls} type="password" autoComplete="off" spellCheck={false}
+              placeholder="local" value={local.apiKey} onChange={(e) => updateLocalModel(i, { apiKey: e.target.value })} />
+          </div>
+        ))}
+
+        <button
+          className="mt-3 rounded-lg border border-border-strong bg-bg px-3 py-2 text-[13px] font-medium text-ink transition hover:bg-surface-2"
+          onClick={addLocalModel}
+        >Add local model</button>
         <div className="mt-1.5 text-[11.5px] leading-snug text-faint">
           Most local servers ignore the key. Embeddings still use the OpenAI key.
         </div>

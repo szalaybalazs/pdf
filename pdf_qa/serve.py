@@ -60,7 +60,10 @@ def emit(obj: dict) -> None:
 
 def _index_stats(store: VectorStore | None) -> dict:
     docs = sorted({c.doc for c in store.chunks}) if store else []
-    models = [{"id": mid, "label": spec["label"]} for mid, spec in config.MODELS.items()]
+    models = [{"id": mid, "label": spec["label"], "provider": spec["provider"],
+               "model": spec["model"],
+               "via_openrouter": bool(config.USE_OPENROUTER and spec.get("openrouter") and not spec.get("direct"))}
+              for mid, spec in config.MODELS.items()]
     return {"docs": docs, "chunks": len(store) if store else 0,
             "vision_model": config.VISION_MODEL, "embed_model": config.EMBED_MODEL,
             "models": models, "default_model": config.DEFAULT_MODEL}

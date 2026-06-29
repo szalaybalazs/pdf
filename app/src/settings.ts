@@ -21,6 +21,13 @@ export interface Settings {
   localBaseUrl: string;
   localApiKey: string;
   localModel: string;
+  localModels: LocalModelSettings[];
+}
+
+export interface LocalModelSettings {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
 }
 
 function settingsPath(): string {
@@ -37,19 +44,35 @@ export function readSettings(): Settings {
       try { return safeStorage.decryptString(Buffer.from(v, "base64")); }
       catch { return ""; }
     };
+    const localModels = Array.isArray(obj.localModels)
+      ? obj.localModels.map((m: any) => ({
+        baseUrl: typeof m?.baseUrl === "string" ? m.baseUrl : "",
+        apiKey: dec(m?.apiKey),
+        model: typeof m?.model === "string" ? m.model : "",
+      })).filter((m: LocalModelSettings) => m.baseUrl || m.apiKey || m.model)
+      : [];
+    if (!localModels.length && (obj.localBaseUrl || obj.localApiKey || obj.localModel)) {
+      localModels.push({
+        baseUrl: typeof obj.localBaseUrl === "string" ? obj.localBaseUrl : "",
+        apiKey: dec(obj.localApiKey),
+        model: typeof obj.localModel === "string" ? obj.localModel : "",
+      });
+    }
+    const firstLocal = localModels[0] || { baseUrl: "", apiKey: "", model: "" };
     return {
       openaiKey: dec(obj.openaiKey),
       anthropicKey: dec(obj.anthropicKey),
       openrouterKey: dec(obj.openrouterKey),
       systemPrompt: typeof obj.systemPrompt === "string" ? obj.systemPrompt : "",
-      localBaseUrl: typeof obj.localBaseUrl === "string" ? obj.localBaseUrl : "",
-      localApiKey: dec(obj.localApiKey),
-      localModel: typeof obj.localModel === "string" ? obj.localModel : "",
+      localBaseUrl: firstLocal.baseUrl,
+      localApiKey: firstLocal.apiKey,
+      localModel: firstLocal.model,
+      localModels,
     };
   } catch {
     return {
       openaiKey: "", anthropicKey: "", openrouterKey: "", systemPrompt: "",
-      localBaseUrl: "", localApiKey: "", localModel: "",
+      localBaseUrl: "", localApiKey: "", localModel: "", localModels: [],
     };
   }
 }
@@ -64,9 +87,14 @@ export function writeSettings(s: Settings): void {
     anthropicKey: encv(s.anthropicKey || ""),
     openrouterKey: encv(s.openrouterKey || ""),
     systemPrompt: s.systemPrompt || "",
-    localBaseUrl: s.localBaseUrl || "",
-    localApiKey: encv(s.localApiKey || ""),
-    localModel: s.localModel || "",
+    localBaseUrl: s.localModels?.[0]?.baseUrl || s.localBaseUrl || "",
+    localApiKey: encv(s.localModels?.[0]?.apiKey || s.localApiKey || ""),
+    localModel: s.localModels?.[0]?.model || s.localModel || "",
+    localModels: (s.localModels || []).map((m) => ({
+      baseUrl: m.baseUrl || "",
+      apiKey: encv(m.apiKey || ""),
+      model: m.model || "",
+    })),
   };
   fs.writeFileSync(settingsPath(), JSON.stringify(obj, null, 2), { mode: 0o600 });
 }

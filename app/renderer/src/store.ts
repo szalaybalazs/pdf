@@ -26,6 +26,17 @@ export function useStore(): number {
 }
 
 const uid = () => Math.random().toString(36).slice(2, 10);
+const MODEL_STORAGE_KEY = "pdf_qa_model";
+
+function readStoredModel(): string {
+  try { return localStorage.getItem(MODEL_STORAGE_KEY) || ""; }
+  catch { return ""; }
+}
+
+function writeStoredModel(id: string): void {
+  try { localStorage.setItem(MODEL_STORAGE_KEY, id); }
+  catch { /* localStorage unavailable */ }
+}
 
 // Tool calls the model makes DURING the answer — rendered inline as a timeline.
 // Everything else (embed_query/search/collect_pages/model) is a pipeline stage.
@@ -60,7 +71,7 @@ export const store: State = {
   activeId: "",
   debug: false,
   visionModel: "gpt-4o",
-  selectedModel: localStorage.getItem("pdf_qa_model") || "",
+  selectedModel: readStoredModel(),
   models: [],
   defaultModel: "",
   docs: [],
@@ -163,8 +174,13 @@ export function setDebug(v: boolean): void { store.debug = v; bump(); }
 
 export function setModel(id: string): void {
   store.selectedModel = id;
-  localStorage.setItem("pdf_qa_model", id);
+  writeStoredModel(id);
   bump();
+}
+
+export async function showModelMenu(): Promise<void> {
+  const selected = await api.showModelMenu(store.models, store.selectedModel);
+  if (selected) setModel(selected);
 }
 
 export function setDocEnabled(name: string, enabled: boolean): void {
@@ -274,6 +290,7 @@ export function threadOff(reqId: string): void {
   const nt: Thread = {
     id: uid(), title: `${t.title} ↳ branch`, messages: slice, history: [],
     disabledDocs: [...(t.disabledDocs || [])], tempDocs: [...(t.tempDocs || [])], busy: false,
+    branchedFromThreadId: t.id, branchedFromReqId: reqId,
   };
   rebuildHistory(nt);
   store.threads.unshift(nt);
@@ -346,9 +363,16 @@ export function installUpdate(): void {
 // ---- model picker / token stats -------------------------------------------
 function applyModels(models: ModelOption[], defaultId: string): void {
   if (!models.length) return;
-  if (!models.some((m) => m.id === store.selectedModel)) {
-    store.selectedModel = defaultId || models[0].id;
+  const savedModel = readStoredModel();
+  const selected = models.some((m) => m.id === savedModel)
+    ? savedModel
+    : models.some((m) => m.id === store.selectedModel)
+      ? store.selectedModel
+      : defaultId || models[0].id;
+  if (store.selectedModel !== selected) {
+    store.selectedModel = selected;
   }
+  writeStoredModel(selected);
   store.models = models;
   store.defaultModel = defaultId;
 }

@@ -22,8 +22,14 @@ export const api = {
   addTempPdfs: (threadId: string, filePaths: string[]) => trpc.addTempPdfs.mutate({ threadId, filePaths }),
   exportPdf: (html: string, title: string) => trpc.exportPdf.mutate({ html, title }),
   showDocMenu: (name: string) => trpc.showDocMenu.mutate(name),
+  showModelMenu: (models: { id: string; label: string; provider?: string; model?: string; via_openrouter?: boolean }[], selectedModel: string) =>
+    trpc.showModelMenu.mutate({ models, selectedModel }),
   getSettings: () => trpc.getSettings.query(),
-  setSettings: (s: { openaiKey: string; anthropicKey: string; openrouterKey: string; systemPrompt: string; localBaseUrl: string; localApiKey: string; localModel: string }) =>
+  setSettings: (s: {
+    openaiKey: string; anthropicKey: string; openrouterKey: string; systemPrompt: string;
+    localBaseUrl: string; localApiKey: string; localModel: string;
+    localModels: { baseUrl: string; apiKey: string; model: string }[];
+  }) =>
     trpc.setSettings.mutate(s),
   onServeEvent: (cb: (e: any) => void) => { trpc.serveEvents.subscribe(undefined, { onData: cb }); },
   onIngestEvent: (cb: (e: any) => void) => { trpc.ingestEvents.subscribe(undefined, { onData: cb }); },

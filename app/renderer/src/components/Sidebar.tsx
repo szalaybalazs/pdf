@@ -3,7 +3,7 @@ import {
   store, activeThread, visibleThreads, newThread, selectThread, deleteThread,
   setSearchQuery, addPdfs, openDoc, showDocMenu, openSettings,
   docEnabled, enabledDocs, setAllDocsEnabled, setDocEnabled, threadDocs,
-  installUpdate,
+  installUpdate, showThreadMenu,
 } from "../store";
 
 function SearchIcon() {
@@ -185,6 +185,7 @@ export function Sidebar() {
               key={t.id}
               className={`group mb-px flex h-[32px] cursor-pointer items-center gap-2 rounded-lg pl-2.5 pr-1.5 text-[13px] transition-colors ${active ? "bg-bg font-medium text-ink shadow-[0_1px_2px_rgba(20,20,18,0.03)]" : "text-muted hover:bg-bg hover:text-ink"}`}
               onClick={() => selectThread(t.id)}
+              onContextMenu={(e) => { e.preventDefault(); selectThread(t.id); showThreadMenu(t.id); }}
             >
               {t.busy && <SidebarSpinner />}
               {!t.busy && threadedOff && (

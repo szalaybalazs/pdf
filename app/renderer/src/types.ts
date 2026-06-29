@@ -11,7 +11,7 @@ export interface Usage { prompt?: number; completion?: number; total?: number; r
 export interface Calc { expression: string; ok: boolean; result?: string; error?: string; verified?: boolean; }
 export interface AnswerEvent {
   type: "answer"; reqId?: string; text: string; thinking?: string; sources: Source[];
-  usage: Usage; calculations?: Calc[]; model?: string;
+  usage: Usage; calculations?: Calc[]; model?: string; latency?: number;  // seconds to generate
 }
 export interface DeltaEvent { type: "delta"; reqId?: string; text: string; }
 export interface ModelOption { id: string; label: string; provider?: string; model?: string; via_openrouter?: boolean; }
@@ -45,6 +45,7 @@ export interface AssistantMsg {
   raw?: string;          // accumulated streamed text (may contain <thinking>)
   thinking?: string;     // parsed reasoning (legacy; inline segments preferred)
   text?: string; sources?: Source[]; usage?: Usage; calculations?: Calc[];
+  latency?: number;      // seconds the backend took to generate this reply
   model?: string;        // concrete answerer model that produced this reply
   sessionId?: string;    // backend session id that produced this reply (debugging)
   streaming?: boolean;   // currently receiving deltas

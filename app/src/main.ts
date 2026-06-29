@@ -6,7 +6,7 @@
  * transport): one-shot calls are mutations/queries, the backend's event feeds
  * are tRPC subscriptions. Also opens documents / page images in the OS viewer.
  */
-import { app, BrowserWindow, shell, dialog, Menu, MenuItemConstructorOptions } from "electron";
+import { app, BrowserWindow, shell, dialog, Menu, MenuItemConstructorOptions, clipboard } from "electron";
 import { spawn, ChildProcessWithoutNullStreams } from "child_process";
 import { EventEmitter } from "events";
 import * as readline from "readline";
@@ -568,6 +568,22 @@ async function showDocMenuAction(name: string): Promise<void> {
   menu.popup({ window: win ?? undefined });
 }
 
+// Native right-click menu for a chat thread in the sidebar.
+async function showThreadMenuAction(input: { title: string; messages: unknown[] }): Promise<void> {
+  log("info", `thread-menu "${input.title}" messages=${input.messages.length}`);
+  const menu = Menu.buildFromTemplate([
+    { label: input.title || "Thread", enabled: false },
+    { type: "separator" },
+    {
+      label: "Copy messages as JSON",
+      click: () => {
+        clipboard.writeText(JSON.stringify(input.messages || [], null, 2));
+      },
+    },
+  ]);
+  menu.popup({ window: win ?? undefined });
+}
+
 function modelProviderLabel(provider: string): string {
   switch (provider) {
     case "openai": return "OpenAI";
@@ -769,7 +785,10 @@ function readRendererFile(rel: string): string {
 async function exportPdfAction(input: { html: string; title: string }): Promise<string> {
   if (!win) return "";
   const css = readRendererFile("styles.css") + "\n" + readRendererFile("vendor/katex/katex.min.css");
-  const doc = `<!doctype html><html><head><meta charset="utf-8"><style>${css}\n` +
+  // The document <title> becomes the PDF's title metadata (shown by viewers).
+  const titleEsc = (input.title || "answer").replace(/[&<>"]/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c] as string));
+  const doc = `<!doctype html><html><head><meta charset="utf-8"><title>${titleEsc}</title><style>${css}\n` +
     `body{background:#fff;color:#1a1a18;max-width:760px;margin:0 auto;padding:36px;}` +
     `</style></head><body><div class="answer">${input.html}</div></body></html>`;
   const pdfWin = new BrowserWindow({ show: false, webPreferences: { sandbox: true } });
@@ -809,6 +828,7 @@ const routerDeps: RouterDeps = {
   addTempPdfs: addTempPdfsAction,
   exportPdf: exportPdfAction,
   showDocMenu: showDocMenuAction,
+  showThreadMenu: showThreadMenuAction,
   showModelMenu: showModelMenuAction,
   getUpdateState,
   installUpdate: installDownloadedUpdate,

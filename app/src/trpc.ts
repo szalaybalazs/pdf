@@ -44,6 +44,7 @@ export interface RouterDeps {
   addTempPdfs: (input: { threadId: string; filePaths: string[] }) => Promise<{ ok: boolean; docs: string[] }>;
   exportPdf: (input: { html: string; title: string }) => Promise<string>;
   showDocMenu: (name: string) => Promise<void>;
+  showThreadMenu: (input: { title: string; messages: unknown[] }) => Promise<void>;
   showModelMenu: (input: { models: ModelMenuItem[]; selectedModel: string }) => Promise<string | null>;
   getUpdateState: () => UpdateState | null;   // current update state for late subscribers
   installUpdate: () => boolean;               // quit + install; false = dev no-op
@@ -84,6 +85,10 @@ export function createAppRouter(deps: RouterDeps) {
     exportPdf: t.procedure.input(z.object({ html: z.string(), title: z.string() }))
       .mutation(({ input }) => deps.exportPdf(input)),
     showDocMenu: t.procedure.input(z.string()).mutation(async ({ input }) => { await deps.showDocMenu(input); return true; }),
+    showThreadMenu: t.procedure.input(z.object({
+      title: z.string(),
+      messages: z.array(z.any()),
+    })).mutation(async ({ input }) => { await deps.showThreadMenu(input); return true; }),
     showModelMenu: t.procedure.input(z.object({
       models: z.array(z.object({
         id: z.string(),

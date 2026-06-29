@@ -156,7 +156,10 @@ SYSTEM_PROMPT = (
     "derive it, DO NOT guess. Say plainly: \"Not enough data available in the documents\" "
     "(or similar), state exactly what is missing, and ask the user the specific question(s) "
     "or for the specific input that would let you proceed. It is correct and expected to "
-    "ask for clarification rather than assume.\n"
+    "ask for clarification rather than assume. This determination MUST appear in your FINAL "
+    "ANSWER to the user — the text AFTER the </thinking> tag — never only inside <thinking>. "
+    "Anything you conclude only in your reasoning is invisible to the user and does not "
+    "count; if the data is insufficient, the user must read that in the answer itself.\n"
     "• If a parameter the user gave is ambiguous or a question is unclear, ask a "
     "clarifying question instead of guessing what they meant.\n"
     "• Cite sources inline as (filename p.N) for every claim.\n"
@@ -214,7 +217,10 @@ TEXT_SYSTEM_PROMPT = (
     "derive it, DO NOT guess. Say plainly: \"Not enough data available in the documents\" "
     "(or similar), state exactly what is missing, and ask the user the specific question(s) "
     "or for the specific input that would let you proceed. It is correct and expected to "
-    "ask for clarification rather than assume.\n"
+    "ask for clarification rather than assume. This determination MUST appear in your FINAL "
+    "ANSWER to the user — the text AFTER the </thinking> tag — never only inside <thinking>. "
+    "Anything you conclude only in your reasoning is invisible to the user and does not "
+    "count; if the data is insufficient, the user must read that in the answer itself.\n"
     "• If a parameter the user gave is ambiguous or a question is unclear, ask a "
     "clarifying question instead of guessing what they meant.\n"
     "• Cite sources inline as (filename p.N) for every claim.\n"
@@ -239,11 +245,21 @@ TEXT_SYSTEM_PROMPT = (
 )
 
 
+# The user only ever sees the text AFTER </thinking>, so the closing reminder
+# forces every real conclusion — especially a "not enough data" finding — out of
+# the private reasoning and into the visible answer.
+_THINK_TAIL = (
+    " The user sees ONLY the text after </thinking>, so every conclusion that "
+    "matters must appear there — in particular, if the documents lack the data to "
+    "answer, state \"Not enough data available in the documents\" and what is "
+    "missing in the final answer, not only inside <thinking>."
+)
+
 THINK_INSTRUCTION = (
     "\n\nBefore answering, reason step by step inside <thinking>...</thinking> tags: "
     "describe what you see in the page images (curve shapes, axis values, schematic "
     "nodes), which equations apply, and any calculation you do. After the closing "
-    "</thinking> tag, give the final answer for the user."
+    "</thinking> tag, give the final answer for the user." + _THINK_TAIL
 )
 
 
@@ -252,7 +268,7 @@ THINK_INSTRUCTION = (
 TEXT_THINK_INSTRUCTION = (
     "\n\nBefore answering, reason step by step inside <thinking>...</thinking> tags: "
     "identify which passages are relevant, which equations apply, and any calculation "
-    "you do. After the closing </thinking> tag, give the final answer for the user."
+    "you do. After the closing </thinking> tag, give the final answer for the user." + _THINK_TAIL
 )
 
 
@@ -323,9 +339,35 @@ def split_thinking(text: str) -> tuple[str, str]:
     return thinking, answer.strip()
 
 
+def _parse_inline_tool_args(raw: str) -> dict | None:
+    """Parse the argument payload from an inline <tool_call> block. Handles two
+    shapes models emit as text: a JSON object ({"expression": "...", "units": ...})
+    and the Hermes/Qwen XML form GLM uses —
+    `calculate<arg_key>expression</arg_key><arg_value>6.23e-13 / 2</arg_value>` —
+    where the leading token is the tool name and each arg is a key/value pair.
+    Returns the args dict, or None if neither shape matches."""
+    import json
+    import re
+    raw = raw.strip()
+    try:
+        payload = json.loads(raw)
+        return payload if isinstance(payload, dict) else None
+    except Exception:
+        pass
+    pairs = re.findall(r"<arg_key>(.*?)</arg_key>\s*<arg_value>(.*?)</arg_value>", raw, re.S)
+    if not pairs:
+        return None
+    out: dict = {k.strip(): v.strip() for k, v in pairs}
+    if "units" in out:
+        out["units"] = str(out["units"]).strip().lower() in ("1", "true", "yes")
+    return out
+
+
 def extract_inline_tool_calls(text: str) -> tuple[str, list]:
-    """Some models emit tool calls as inline `<tool_call>{json}</tool_call>` text
+    """Some models emit tool calls as inline `<tool_call>...</tool_call>` text
     instead of through the tool API, which would otherwise leak into the answer.
+    Both a JSON payload and GLM's Hermes XML form (<arg_key>/<arg_value>) are
+    recognised.
 
     Strip every such block from the visible answer and, for `calculate`-style
     payloads ({"expression": "...", "units": bool}), actually run the calculation
@@ -334,17 +376,14 @@ def extract_inline_tool_calls(text: str) -> tuple[str, list]:
     error} shape used elsewhere. A trailing unclosed <tool_call> (mid-stream) is
     dropped too.
     """
-    import json
     import re
     from . import calc
     calcs: list = []
 
     def _run(m) -> str:
-        raw = m.group(1).strip()
-        try:
-            payload = json.loads(raw)
-        except Exception:
-            return ""   # not JSON we understand — just remove the markup
+        payload = _parse_inline_tool_args(m.group(1))
+        if not payload:
+            return ""   # not a shape we understand — just remove the markup
         expr = str(payload.get("expression", "")).strip()
         if expr:
             res = calc.evaluate(expr, bool(payload.get("units")))
@@ -529,6 +568,13 @@ def _format_passages(contexts: list[dict]) -> str:
 # we cap iterations far above any real need so a misbehaving model can't spin
 # forever (and rack up cost). Effectively "unlimited" for normal use.
 _MAX_TOOL_ROUNDS = 100
+
+# A model stuck in a useless tool loop (e.g. GLM dividing a number by 2 fifty
+# times) calls tools round after round without ever writing prose. A real answer
+# interleaves text between calculation batches, which resets the counter; this
+# many consecutive tool-only rounds means the model has lost the plot, so we stop
+# offering tools and force it to write the final answer from what it already has.
+_MAX_TOOLONLY_ROUNDS = 24
 
 
 def _run_calc(tc_name: str, raw_args: str, collected: list) -> str:
@@ -727,10 +773,13 @@ def _answer_stream_openai(question: str, contexts: list[dict], image_paths: list
     pending = False   # last round still wanted tools but we ran out of rounds
     tools_ok = bool(tools)   # some local (Ollama) vision models reject `tools` — drop them on first failure
 
-    def _open_stream(tool_choice: str | None = None):
+    def _open_stream(tool_choice: str | None = None, use_tools: bool = True):
         """Start a chat stream, gracefully degrading if the server can't do tools.
         Local vision models often 400 with 'does not support tools'; in that case we
-        retry without tools (the calculate/search tools just go unused)."""
+        retry without tools (the calculate/search tools just go unused). Pass
+        use_tools=False to omit the tools entirely (the forced final turn) — some
+        models (e.g. GLM) emit an inline tool-call as text when tools are present
+        but `tool_choice` forbids them, instead of writing the actual answer."""
         nonlocal tools_ok
         kw = dict(messages=messages, stream=True,
                   stream_options={"include_usage": True}, **_chat_kwargs(model))
@@ -738,7 +787,7 @@ def _answer_stream_openai(question: str, contexts: list[dict], image_paths: list
             # Ask OpenRouter to generate AND include reasoning tokens so we can stream
             # them as live "thinking" instead of sitting through a silent gap.
             kw["extra_body"] = {"reasoning": {"enabled": True}}
-        if tools_ok and tools:
+        if use_tools and tools_ok and tools:
             kw["tools"] = tools
             if tool_choice:
                 kw["tool_choice"] = tool_choice
@@ -754,6 +803,7 @@ def _answer_stream_openai(question: str, contexts: list[dict], image_paths: list
             raise
 
     think_open = False   # currently streaming reasoning inside an injected <thinking> block
+    toolonly_rounds = 0  # consecutive rounds with tool calls but no prose (spiral guard)
 
     for _ in range(_MAX_TOOL_ROUNDS):
         stream = _open_stream()
@@ -799,6 +849,10 @@ def _answer_stream_openai(question: str, contexts: list[dict], image_paths: list
             pending = False
             break
         pending = True
+        # Spiral guard: count rounds that called tools but produced no answer prose.
+        # A healthy answer writes text between calculation batches (resetting this);
+        # a runaway loop never does. Trip → break out and force a final answer below.
+        toolonly_rounds = toolonly_rounds + 1 if not "".join(round_content).strip() else 0
         # record the assistant turn that requested the tools, then run them
         messages.append({"role": "assistant", "content": "".join(round_content) or None,
                          "tool_calls": [{"id": tool_calls[i]["id"] or f"call_{i}", "type": "function",
@@ -835,12 +889,19 @@ def _answer_stream_openai(question: str, contexts: list[dict], image_paths: list
                 content.append({"type": "image_url",
                                 "image_url": {"url": _image_data_url(p, config.VISION_MAX_DIM)}})
             messages.append({"role": "user", "content": content})
+        if toolonly_rounds >= _MAX_TOOLONLY_ROUNDS:
+            break   # runaway tool loop — stop and force the final answer below
 
-    # If the model kept calling tools until the round budget ran out, it never
-    # produced a final answer — force one more turn with tools disabled so the
-    # user always gets a rendered response (not just the tool-call trace).
+    # The model either ran out of the round budget or tripped the spiral guard
+    # without producing a final answer. Force one: drop the tools ENTIRELY (not
+    # just tool_choice="none" — some models, e.g. GLM, then emit a tool call as
+    # inline text instead of prose) and tell it explicitly to write up the result.
     if pending:
-        stream = _open_stream(tool_choice="none")
+        messages.append({"role": "user", "content":
+            "Stop calling tools. Using the values you have already computed above, "
+            "write your complete final answer now in prose. Do NOT call any tool or "
+            "emit any tool-call syntax — just the answer."})
+        stream = _open_stream(use_tools=False)
         for chunk in stream:
             _add_usage(usage_tot, getattr(chunk, "usage", None))
             if not chunk.choices:

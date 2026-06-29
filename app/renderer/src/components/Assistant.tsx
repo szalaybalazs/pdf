@@ -1,11 +1,19 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { AssistantMsg, ToolEvent, Segment, Calc } from "../types";
-import { store, regenerate, threadOff } from "../store";
+import { store, activeThread, regenerate, threadOff } from "../store";
 import { api } from "../trpc";
 import {
   renderMarkdown, linkifyCitationsHtml, annotateCalcsHtml, renderMermaidBlocks,
   buildSegments,
 } from "../markdown";
+
+// Human-readable generation time: "3.4s" under a minute, "1m 05s" beyond.
+function fmtDuration(seconds: number): string {
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const m = Math.floor(seconds / 60);
+  const s = Math.round(seconds % 60);
+  return `${m}m ${String(s).padStart(2, "0")}s`;
+}
 
 function TraceRow({ ev, pending }: { ev: ToolEvent; pending?: boolean }) {
   const dbg = store.debug ? ev.debug : [];
@@ -98,7 +106,11 @@ export function Assistant({ m }: { m: AssistantMsg }) {
       linkifyCitationsHtml(renderMarkdown(m.text || "", true), m.sources || []),
       m.calculations,
     );
-    const title = (m.text || "answer").replace(/[#*`>\n]/g, " ").trim().slice(0, 50);
+    // Name the PDF after the thread; fall back to the answer's first line.
+    const threadTitle = activeThread()?.title?.trim();
+    const title = (threadTitle && threadTitle !== "New thread")
+      ? threadTitle
+      : (m.text || "answer").replace(/[#*`>\n]/g, " ").trim().slice(0, 50);
     void api.exportPdf(html, title);
   };
 
@@ -172,10 +184,13 @@ export function Assistant({ m }: { m: AssistantMsg }) {
             </div>
           )}
 
-          {m.usage && m.usage.total && (
+          {((m.usage && m.usage.total) || m.latency) && (
             <div className="usage">
-              {m.usage.prompt} in + {m.usage.completion} out = {m.usage.total} tokens
-              {m.usage.reasoning ? ` · ${m.usage.reasoning} reasoning` : ""} · {m.model || store.visionModel}
+              {m.usage && m.usage.total
+                ? <>{m.usage.prompt} in + {m.usage.completion} out = {m.usage.total} tokens
+                    {m.usage.reasoning ? ` · ${m.usage.reasoning} reasoning` : ""} · </>
+                : null}
+              {m.latency ? `${fmtDuration(m.latency)} · ` : ""}{m.model || store.visionModel}
               {m.sessionId ? ` · sid:${m.sessionId}` : ""}
             </div>
           )}

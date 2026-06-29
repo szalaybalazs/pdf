@@ -331,6 +331,12 @@ export function showDocMenu(name: string): void {
   void api.showDocMenu(name);   // native Electron menu; Open / Remove handled in main
 }
 
+export function showThreadMenu(id: string): void {
+  const t = store.threads.find((thread) => thread.id === id);
+  if (!t) return;
+  void api.showThreadMenu(t.title, t.messages);   // native Electron menu; copy handled in main
+}
+
 export function removeDoc(name: string): void {
   // Optimistically drop it from the list; the backend's follow-up "ready" event
   // (with the authoritative doc list) will reconcile.
@@ -500,6 +506,7 @@ export function handleServeEvent(ev: ServeEvent): void {
     const a = ev as AnswerEvent;
     msg.text = a.text; msg.thinking = a.thinking ?? msg.thinking;
     msg.sources = a.sources; msg.usage = a.usage; msg.calculations = a.calculations;
+    msg.latency = a.latency;
     msg.model = a.model; msg.sessionId = (a as any).session_id; msg.streaming = false; msg.done = true;
     if (a.usage && a.usage.total) updateTokenStats(a.usage);
     const question = lastUserText(thread);

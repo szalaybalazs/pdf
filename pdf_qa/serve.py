@@ -12,7 +12,7 @@ Requests (stdin):
 Events (stdout):
     {"type":"ready","docs":[...],"chunks":N,"vision_model":"gpt-4o"}
     {"type":"tool","reqId","name","args","detail":[...],"debug":[...],"duration":s}
-    {"type":"answer","reqId","text","sources":[{doc,page,image}],"usage":{...}}
+    {"type":"answer","reqId","text","sources":[{doc,page,image}],"usage":{...},"latency":s}
     {"type":"error","reqId","message"}
 
 `history` items are {"role":"user"|"assistant","content":"..."} text turns, owned
@@ -323,7 +323,8 @@ def handle_query(store: VectorStore | None, req: dict) -> None:
     for c in calcs:
         c["verified"] = bool(c.get("ok") and c.get("result") and str(c["result"]) in ans)
     emit({"type": "answer", "reqId": rid, "text": ans, "thinking": thinking,
-          "sources": sources, "usage": u, "calculations": calcs, "model": model_name})
+          "sources": sources, "usage": u, "calculations": calcs, "model": model_name,
+          "latency": (final or {}).get("latency")})
 
 
 def _warm_imports() -> None:

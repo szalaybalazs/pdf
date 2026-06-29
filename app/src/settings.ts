@@ -22,6 +22,9 @@ export interface Settings {
   localApiKey: string;
   localModel: string;
   localModels: LocalModelSettings[];
+  // Anonymous usage analytics (Aptabase). Opt-out: defaults to true (enabled),
+  // but never sends document content, filenames, questions, answers, or keys.
+  analyticsEnabled: boolean;
 }
 
 export interface LocalModelSettings {
@@ -73,11 +76,14 @@ export function readSettings(): Settings {
       localApiKey: firstLocal.apiKey,
       localModel: firstLocal.model,
       localModels,
+      // default ON; only an explicit `false` opts out
+      analyticsEnabled: obj.analyticsEnabled !== false,
     };
   } catch {
     return {
       openaiKey: "", anthropicKey: "", openrouterKey: "", systemPrompt: "",
       localBaseUrl: "", localApiKey: "", localModel: "", localModels: [],
+      analyticsEnabled: true,
     };
   }
 }
@@ -101,6 +107,7 @@ export function writeSettings(s: Settings): void {
       model: m.model || "",
       textOnly: !!m.textOnly,
     })),
+    analyticsEnabled: s.analyticsEnabled !== false,
   };
   fs.writeFileSync(settingsPath(), JSON.stringify(obj, null, 2), { mode: 0o600 });
 }

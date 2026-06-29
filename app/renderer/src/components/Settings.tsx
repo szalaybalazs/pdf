@@ -21,6 +21,7 @@ export function Settings() {
   const [openrouter, setOpenrouter] = useState("");
   const [systemPrompt, setSystemPrompt] = useState("");
   const [localModels, setLocalModels] = useState<LocalModelForm[]>([blankLocalModel()]);
+  const [analyticsEnabled, setAnalyticsEnabled] = useState(true);
   const [dataDir, setDataDir] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -40,6 +41,7 @@ export function Settings() {
           ? [{ baseUrl: s.localBaseUrl || "", apiKey: s.localApiKey || "", model: s.localModel || "", textOnly: false }]
           : [blankLocalModel()]);
       setLocalModels(models);
+      setAnalyticsEnabled(s.analyticsEnabled !== false);
       setDataDir(s.dataDir || "");
     }).catch(() => { /* show empty form */ });
     return () => { alive = false; };
@@ -67,6 +69,7 @@ export function Settings() {
         systemPrompt: systemPrompt.trim(),
         localBaseUrl: firstLocal.baseUrl, localApiKey: firstLocal.apiKey, localModel: firstLocal.model,
         localModels: cleanedLocalModels,
+        analyticsEnabled,
       });
       store.statusErr = false;
       store.status = "reconnecting to backend…";   // next "ready" overwrites this
@@ -155,6 +158,18 @@ export function Settings() {
         >Add local model</button>
         <div className="mt-1.5 text-[11.5px] leading-snug text-faint">
           Most local servers ignore the key. Embeddings still use the OpenAI key.
+        </div>
+
+        <div className="mt-5 mb-1 border-t border-border-strong pt-4 text-[13px] font-semibold tracking-tight text-ink">
+          Privacy
+        </div>
+        <label className="mt-1 flex items-center gap-2 text-[12px] text-ink">
+          <input type="checkbox" checked={analyticsEnabled}
+            onChange={(e) => setAnalyticsEnabled(e.target.checked)} />
+          Send anonymous usage data
+        </label>
+        <div className="mt-1 text-[11.5px] leading-snug text-faint">
+          Helps improve the app. Counts only — never your documents, file names, questions, answers, or API keys.
         </div>
 
         <div className="mt-4 text-[12px] text-faint">Keys are stored encrypted on this machine. Data directory:</div>

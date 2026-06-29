@@ -20,6 +20,7 @@ import { createAppRouter, RouterDeps } from "./trpc";
 import { checkForUpdates, initAutoUpdater, installDownloadedUpdate, getUpdateState } from "./updater";
 import type { UpdateState } from "./trpc";
 import { APP_NAME } from "./branding";
+import { initAnalytics, setAnalyticsEnabled, track } from "./analytics";
 
 let win: BrowserWindow | null = null;
 let serve: ChildProcessWithoutNullStreams | null = null;
@@ -289,6 +290,84 @@ function backendEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
+// --- analytics: model attribution ------------------------------------------
+// Built from each backend "ready" event so questions/answers can be attributed
+// to a provider + concrete model without parsing strings. `reqModel` carries the
+// chosen model from a query through to its answer/error (keyed by reqId).
+interface ModelMeta { provider: string; model: string; via_openrouter: boolean; }
+const modelCatalog = new Map<string, ModelMeta>();   // model id -> meta
+const reqModel = new Map<string, ModelMeta>();        // reqId -> model used
+let sessionReadyTracked = false;
+
+function modelProps(meta?: ModelMeta): Record<string, string | boolean> {
+  return meta ? { provider: meta.provider, model: meta.model, via_openrouter: meta.via_openrouter } : {};
+}
+
+// Refresh the catalog from a "ready" event and, once per session, report the
+// configured providers + library size (counts only, never document names).
+function updateModelCatalog(ev: {
+  models?: { id?: string; provider?: string; model?: string; via_openrouter?: boolean }[];
+  docs?: unknown[]; chunks?: number;
+}): void {
+  if (Array.isArray(ev.models)) {
+    modelCatalog.clear();
+    for (const m of ev.models) {
+      if (m && typeof m.id === "string") {
+        modelCatalog.set(m.id, {
+          provider: m.provider || "other",
+          model: m.model || m.id,
+          via_openrouter: !!m.via_openrouter,
+        });
+      }
+    }
+  }
+  if (!sessionReadyTracked && modelCatalog.size) {
+    sessionReadyTracked = true;
+    const providers = [...new Set([...modelCatalog.values()].map((m) => m.provider))].sort();
+    track("session_ready", {
+      model_count: modelCatalog.size,
+      providers: providers.join(",") || "none",
+      library_documents: Array.isArray(ev.docs) ? ev.docs.length : 0,
+      library_chunks: typeof ev.chunks === "number" ? ev.chunks : 0,
+    });
+  }
+}
+
+// Translate a backend stdout event into an anonymous analytics event. Only
+// counts/latencies/providers/model ids are forwarded — never answer text,
+// sources, error messages, or document names.
+function trackBackendEvent(obj: unknown): void {
+  const ev = obj as {
+    type?: string; reqId?: string; latency?: number; model?: string;
+    usage?: { prompt?: number; completion?: number; total?: number; reasoning?: number };
+    sources?: unknown[]; calculations?: unknown[];
+    models?: { id?: string; provider?: string; model?: string; via_openrouter?: boolean }[];
+    docs?: unknown[]; chunks?: number;
+  };
+  if (!ev || typeof ev.type !== "string") return;
+  if (ev.type === "ready") { updateModelCatalog(ev); return; }
+  if (ev.type === "answer") {
+    const meta = ev.reqId ? reqModel.get(ev.reqId) : undefined;
+    if (ev.reqId) reqModel.delete(ev.reqId);
+    const props: Record<string, string | number | boolean> = { ...modelProps(meta) };
+    if (!meta && ev.model) props.model = ev.model;   // fallback when the selection wasn't in the catalog
+    if (typeof ev.latency === "number") props.latency_ms = Math.round(ev.latency * 1000);
+    if (ev.usage) {
+      if (typeof ev.usage.prompt === "number") props.prompt_tokens = ev.usage.prompt;
+      if (typeof ev.usage.completion === "number") props.completion_tokens = ev.usage.completion;
+      if (typeof ev.usage.total === "number") props.total_tokens = ev.usage.total;
+      if (ev.usage.reasoning) props.reasoning_tokens = ev.usage.reasoning;
+    }
+    if (Array.isArray(ev.sources)) props.num_sources = ev.sources.length;
+    if (Array.isArray(ev.calculations)) props.num_calculations = ev.calculations.length;
+    track("answer_received", props);
+  } else if (ev.type === "error" && ev.reqId) {
+    const meta = reqModel.get(ev.reqId);
+    reqModel.delete(ev.reqId);
+    track("answer_error", modelProps(meta));   // provider/model if known; never the message
+  }
+}
+
 function startBackend(): void {
   const { cmd, args, cwd } = backendCommand("serve");
   log("info", `spawning backend: ${cmd} ${args.join(" ")} (cwd=${cwd})`);
@@ -310,6 +389,7 @@ function startBackend(): void {
       const obj = JSON.parse(line);
       if (obj && obj.type === "error") { sawBackendError = true; log("error", "backend event: error", preview(obj)); }
       else log("info", `backend event: ${obj?.type ?? "?"}`, preview(obj));
+      trackBackendEvent(obj);
       emitServe(obj);
     } catch {
       // non-JSON stdout (e.g. stray print) — surface as a log
@@ -482,6 +562,16 @@ function restartBackend(): void {
 // --- backend actions (exposed to the renderer through the tRPC router) -------
 function sendToBackend(req: unknown): void {
   const type = (req as { type?: string })?.type ?? "?";
+  if (type === "query") {
+    // Count + chosen model only — never the question text, history, or doc names.
+    const q = req as { reqId?: string; model?: string; docs?: unknown[] };
+    const meta = typeof q.model === "string" ? modelCatalog.get(q.model) : undefined;
+    if (q.reqId && meta) reqModel.set(q.reqId, meta);   // carry through to the answer/error
+    track("question_asked", {
+      doc_count: Array.isArray(q.docs) ? q.docs.length : 0,
+      ...modelProps(meta),
+    });
+  }
   if (serve && serve.stdin.writable) {
     log("info", `-> backend request: ${type}`, preview(req));
     serve.stdin.write(JSON.stringify(req) + "\n");
@@ -628,6 +718,11 @@ async function showModelMenuAction(input: {
       checked: model.id === input.selectedModel,
       click: () => {
         picked = model.id;
+        track("model_selected", {
+          provider: model.provider || "other",
+          model: model.model || model.id,
+          via_openrouter: !!model.via_openrouter,
+        });
         resolve(picked);
       },
     } as MenuItemConstructorOptions));
@@ -673,7 +768,9 @@ async function setSettingsAction(s: Settings): Promise<{ ok: boolean }> {
       model: m.model || "",
       textOnly: !!m.textOnly,
     })),
+    analyticsEnabled: s.analyticsEnabled !== false,
   });
+  setAnalyticsEnabled(s.analyticsEnabled !== false);  // honor opt-in/out without a restart
   restartBackend(); // respawn so the Python backend picks up the new keys
   return { ok: true };
 }
@@ -699,7 +796,12 @@ async function addPdfsAction(): Promise<{ canceled: boolean; count?: number }> {
     rl.on("line", (line) => {
       line = line.trim();
       if (!line) return;
-      try { const ev = JSON.parse(line); log("info", `ingest event: ${ev?.type ?? "?"}`, preview(ev)); emitIngest(ev); }
+      try {
+        const ev = JSON.parse(line);
+        log("info", `ingest event: ${ev?.type ?? "?"}`, preview(ev));
+        if (ev?.type === "ingest_done" && typeof ev.added === "number") track("pdf_ingested", { added: ev.added });
+        emitIngest(ev);
+      }
       catch { emitLog(line); }
     });
     let err = "";
@@ -803,6 +905,7 @@ async function exportPdfAction(input: { html: string; title: string }): Promise<
     if (res.canceled || !res.filePath) { log("info", "export-pdf canceled"); return ""; }
     fs.writeFileSync(res.filePath, data);
     log("info", `export-pdf -> ${res.filePath}`);
+    track("pdf_exported");
     void shell.openPath(res.filePath);
     return res.filePath;
   } catch (e) {
@@ -835,14 +938,24 @@ const routerDeps: RouterDeps = {
 };
 const appRouter = createAppRouter(routerDeps);
 
+// Aptabase requires initialize() to run before the app `ready` event; it waits
+// for whenReady internally. The opt-out flag is applied once settings are
+// readable (inside the ready handler, before any event is tracked).
+initAnalytics({ log });
+
 app.whenReady().then(() => {
   openLog();
   copyLegacyDataIfNeeded();
   cleanupTempThreadIndexes();
+  setAnalyticsEnabled(readSettings().analyticsEnabled);
+  track("app_started", { platform: process.platform, arch: process.arch });
   startBackend();
   installApplicationMenu();
   createWindow();
-  initAutoUpdater(() => win, log, (s: UpdateState) => bus.emit("update-event", s));
+  initAutoUpdater(() => win, log, (s: UpdateState) => {
+    if (s.status === "downloaded") track("update_downloaded", s.version ? { version: s.version } : {});
+    bus.emit("update-event", s);
+  });
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

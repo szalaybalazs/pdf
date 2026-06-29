@@ -15,6 +15,7 @@ export interface AppSettings {
   openaiKey: string; anthropicKey: string; openrouterKey: string; systemPrompt: string;
   localBaseUrl: string; localApiKey: string; localModel: string; dataDir?: string;
   localModels: LocalModelSettings[];
+  analyticsEnabled: boolean;
 }
 export interface LocalModelSettings { baseUrl: string; apiKey: string; model: string; textOnly: boolean; }
 export interface ModelMenuItem { id: string; label: string; provider?: string; model?: string; via_openrouter?: boolean; }
@@ -36,7 +37,7 @@ export interface RouterDeps {
   markServeSubscribed: () => void;
   sendToBackend: (req: unknown) => void;
   getSettings: () => Promise<AppSettings>;
-  setSettings: (s: { openaiKey: string; anthropicKey: string; openrouterKey: string; systemPrompt: string; localBaseUrl: string; localApiKey: string; localModel: string; localModels: LocalModelSettings[] }) => Promise<{ ok: boolean }>;
+  setSettings: (s: { openaiKey: string; anthropicKey: string; openrouterKey: string; systemPrompt: string; localBaseUrl: string; localApiKey: string; localModel: string; localModels: LocalModelSettings[]; analyticsEnabled: boolean }) => Promise<{ ok: boolean }>;
   openFigure: (filePath: string) => Promise<string>;
   openDoc: (name: string) => Promise<string>;
   removeDoc: (name: string) => Promise<void>;
@@ -66,6 +67,7 @@ const keys = z.object({
     model: z.string(),
     textOnly: z.boolean().default(false),
   })).default([]),
+  analyticsEnabled: z.boolean().default(true),
 });
 
 export function createAppRouter(deps: RouterDeps) {

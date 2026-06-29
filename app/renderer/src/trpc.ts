@@ -30,6 +30,7 @@ export const api = {
     openaiKey: string; anthropicKey: string; openrouterKey: string; systemPrompt: string;
     localBaseUrl: string; localApiKey: string; localModel: string;
     localModels: { baseUrl: string; apiKey: string; model: string; textOnly: boolean }[];
+    analyticsEnabled: boolean;
   }) =>
     trpc.setSettings.mutate(s),
   onServeEvent: (cb: (e: any) => void) => { trpc.serveEvents.subscribe(undefined, { onData: cb }); },

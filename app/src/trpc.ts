@@ -49,6 +49,7 @@ export interface RouterDeps {
   showModelMenu: (input: { models: ModelMenuItem[]; selectedModel: string }) => Promise<string | null>;
   getUpdateState: () => UpdateState | null;   // current update state for late subscribers
   installUpdate: () => boolean;               // quit + install; false = dev no-op
+  track: (event: string, props?: Record<string, string | number | boolean>) => void;  // renderer-originated analytics
 }
 
 const t = initTRPC.create({ isServer: true });
@@ -102,6 +103,10 @@ export function createAppRouter(deps: RouterDeps) {
       selectedModel: z.string(),
     })).mutation(({ input }) => deps.showModelMenu(input)),
     installUpdate: t.procedure.mutation(() => deps.installUpdate()),
+    track: t.procedure.input(z.object({
+      event: z.string(),
+      props: z.record(z.union([z.string(), z.number(), z.boolean()])).optional(),
+    })).mutation(({ input }) => { deps.track(input.event, input.props); return true; }),
 
     // --- streamed backend feeds --------------------------------------------
     updateEvents: t.procedure.subscription(() => observable<UpdateState>((emit) => {

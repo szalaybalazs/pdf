@@ -67,11 +67,11 @@ export function App() {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "n") {
         e.preventDefault();
-        newThread();
+        newThread(true);
       }
       if (e.key === "Escape" && store.settingsOpen) closeSettings();
     };
-    const onNewThread = () => newThread();
+    const onNewThread = () => newThread(true);
     const onOpenSettings = () => openSettings();
     window.addEventListener("keydown", onKey);
     window.addEventListener("pdf-qa-new-thread", onNewThread);

@@ -158,7 +158,7 @@ export function Sidebar() {
       <button
         className={`${navRow} font-medium text-ink`}
         title="New chat (⌘N)"
-        onClick={() => newThread()}
+        onClick={() => newThread(true)}
       >
         <EditIcon />
         <span>New chat</span>

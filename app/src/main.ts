@@ -292,15 +292,44 @@ function backendEnv(): NodeJS.ProcessEnv {
 
 // --- analytics: model attribution ------------------------------------------
 // Built from each backend "ready" event so questions/answers can be attributed
-// to a provider + concrete model without parsing strings. `reqModel` carries the
-// chosen model from a query through to its answer/error (keyed by reqId).
+// to a provider + concrete model without parsing strings. `reqModel`/`reqTools`
+// carry the chosen model and the agentic tool-call counts from a query through
+// to its answer/error (keyed by reqId).
 interface ModelMeta { provider: string; model: string; via_openrouter: boolean; }
+interface ReqTools { searches: number; getPages: number; }
 const modelCatalog = new Map<string, ModelMeta>();   // model id -> meta
 const reqModel = new Map<string, ModelMeta>();        // reqId -> model used
+const reqTools = new Map<string, ReqTools>();         // reqId -> in-flight tool counts
 let sessionReadyTracked = false;
 
 function modelProps(meta?: ModelMeta): Record<string, string | boolean> {
   return meta ? { provider: meta.provider, model: meta.model, via_openrouter: meta.via_openrouter } : {};
+}
+
+// Drop any per-request state once an answer/error closes it out (or a query is
+// abandoned), so the maps can't grow without bound over a long session.
+function clearReqState(reqId?: string): void {
+  if (!reqId) return;
+  reqModel.delete(reqId);
+  reqTools.delete(reqId);
+}
+
+// Bucket a backend error message into a coarse, content-free category. The raw
+// message can contain file paths or document text, so it is NEVER forwarded —
+// only this enum is.
+function errorKind(message: unknown): string {
+  const m = typeof message === "string" ? message.toLowerCase() : "";
+  if (!m) return "unknown";
+  if (m.includes("no index") || m.includes("build the index")) return "no_index";
+  if (m.includes("no documents are enabled")) return "no_docs_enabled";
+  if (m.includes("could not start python") || m.includes("spawn")) return "spawn_failed";
+  if (m.includes("modulenotfound") || (m.includes("module") && m.includes("not found"))) return "missing_module";
+  if (m.includes("exited")) return "backend_exited";
+  if (m.includes("unauthor") || m.includes("api key") || m.includes("401")) return "auth";
+  if (m.includes("rate limit") || m.includes("429")) return "rate_limit";
+  if (m.includes("timeout") || m.includes("timed out")) return "timeout";
+  if (m.includes("connection") || m.includes("network") || m.includes("econn")) return "network";
+  return "other";
 }
 
 // Refresh the catalog from a "ready" event and, once per session, report the
@@ -338,7 +367,7 @@ function updateModelCatalog(ev: {
 // sources, error messages, or document names.
 function trackBackendEvent(obj: unknown): void {
   const ev = obj as {
-    type?: string; reqId?: string; latency?: number; model?: string;
+    type?: string; reqId?: string; name?: string; message?: string; latency?: number; model?: string;
     usage?: { prompt?: number; completion?: number; total?: number; reasoning?: number };
     sources?: unknown[]; calculations?: unknown[];
     models?: { id?: string; provider?: string; model?: string; via_openrouter?: boolean }[];
@@ -346,9 +375,18 @@ function trackBackendEvent(obj: unknown): void {
   };
   if (!ev || typeof ev.type !== "string") return;
   if (ev.type === "ready") { updateModelCatalog(ev); return; }
+  if (ev.type === "tool" && ev.reqId && (ev.name === "search_documents" || ev.name === "get_pages")) {
+    // The backend emits a search_documents/get_pages tool row for both the initial
+    // retrieval and each model-driven re-fetch — counting them shows how heavily
+    // the agentic loop is used. (calculate is reported via the answer's calc list.)
+    const agg = reqTools.get(ev.reqId) || { searches: 0, getPages: 0 };
+    if (ev.name === "search_documents") agg.searches++; else agg.getPages++;
+    reqTools.set(ev.reqId, agg);
+    return;
+  }
   if (ev.type === "answer") {
     const meta = ev.reqId ? reqModel.get(ev.reqId) : undefined;
-    if (ev.reqId) reqModel.delete(ev.reqId);
+    const tools = ev.reqId ? reqTools.get(ev.reqId) : undefined;
     const props: Record<string, string | number | boolean> = { ...modelProps(meta) };
     if (!meta && ev.model) props.model = ev.model;   // fallback when the selection wasn't in the catalog
     if (typeof ev.latency === "number") props.latency_ms = Math.round(ev.latency * 1000);
@@ -360,12 +398,42 @@ function trackBackendEvent(obj: unknown): void {
     }
     if (Array.isArray(ev.sources)) props.num_sources = ev.sources.length;
     if (Array.isArray(ev.calculations)) props.num_calculations = ev.calculations.length;
+    props.num_searches = tools?.searches ?? 0;       // incl. the initial retrieval
+    props.num_get_pages = tools?.getPages ?? 0;      // model-driven page fetches
     track("answer_received", props);
+    clearReqState(ev.reqId);
   } else if (ev.type === "error" && ev.reqId) {
-    const meta = reqModel.get(ev.reqId);
-    reqModel.delete(ev.reqId);
-    track("answer_error", modelProps(meta));   // provider/model if known; never the message
+    track("answer_error", { ...modelProps(reqModel.get(ev.reqId)), kind: errorKind(ev.message) });
+    clearReqState(ev.reqId);
+  } else if (ev.type === "error") {
+    // No reqId → an app/backend-level failure (spawn, exit, missing index/key).
+    track("backend_error", { kind: errorKind(ev.message) });
   }
+}
+
+// Ingest failures, by category — never the raw message (it can carry paths).
+function trackIngestEvent(ev: { type?: string; reason?: string }): void {
+  if (!ev || typeof ev.type !== "string") return;
+  if (ev.type === "ingest_error") track("ingest_failed");
+  else if (ev.type === "file_error") track("file_failed");
+  else if (ev.type === "file_skip") {
+    const r = (ev.reason || "").toLowerCase();
+    const reason = r.includes("already") ? "already_indexed" : r.includes("not found") ? "not_found" : "other";
+    track("file_skipped", { reason });
+  }
+}
+
+// Once-per-install activation markers (e.g. first PDF, first question). Backed by
+// a stamp file under userData so the funnel survives restarts; returns true the
+// first time only. Never throws.
+function firstTime(marker: string): boolean {
+  const f = path.join(dataDir(), "analytics-markers", marker);
+  try {
+    if (fs.existsSync(f)) return false;
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(f, new Date().toISOString());
+    return true;
+  } catch { return false; }
 }
 
 function startBackend(): void {
@@ -571,6 +639,7 @@ function sendToBackend(req: unknown): void {
       doc_count: Array.isArray(q.docs) ? q.docs.length : 0,
       ...modelProps(meta),
     });
+    if (firstTime("first_question")) track("first_question_asked", modelProps(meta));
   }
   if (serve && serve.stdin.writable) {
     log("info", `-> backend request: ${type}`, preview(req));
@@ -771,6 +840,16 @@ async function setSettingsAction(s: Settings): Promise<{ ok: boolean }> {
     analyticsEnabled: s.analyticsEnabled !== false,
   });
   setAnalyticsEnabled(s.analyticsEnabled !== false);  // honor opt-in/out without a restart
+  // Which providers are configured + whether a custom prompt is set — booleans
+  // and counts only, NEVER the key values or prompt text.
+  track("settings_saved", {
+    has_openai: !!s.openaiKey,
+    has_anthropic: !!s.anthropicKey,
+    has_openrouter: !!s.openrouterKey,
+    local_model_count: (s.localModels || []).filter((m) => m.model?.trim()).length,
+    has_system_prompt: !!s.systemPrompt?.trim(),
+    analytics_enabled: s.analyticsEnabled !== false,
+  });
   restartBackend(); // respawn so the Python backend picks up the new keys
   return { ok: true };
 }
@@ -799,7 +878,11 @@ async function addPdfsAction(): Promise<{ canceled: boolean; count?: number }> {
       try {
         const ev = JSON.parse(line);
         log("info", `ingest event: ${ev?.type ?? "?"}`, preview(ev));
-        if (ev?.type === "ingest_done" && typeof ev.added === "number") track("pdf_ingested", { added: ev.added });
+        if (ev?.type === "ingest_done" && typeof ev.added === "number") {
+          track("pdf_ingested", { added: ev.added });
+          if (ev.added > 0 && firstTime("first_pdf")) track("first_pdf_added", { added: ev.added });
+        }
+        trackIngestEvent(ev);
         emitIngest(ev);
       }
       catch { emitLog(line); }
@@ -808,6 +891,7 @@ async function addPdfsAction(): Promise<{ canceled: boolean; count?: number }> {
     proc.stderr.on("data", (d: Buffer) => { err = (err + d.toString()).slice(-1500); log("warn", "ingest stderr", preview(d.toString(), 500)); });
     proc.on("error", (e) => {
       log("error", "ingest spawn error", e.message);
+      track("ingest_failed", { kind: "spawn_failed" });
       emitIngest({ type: "ingest_error", message: e.message });
     });
     proc.on("close", (code) => {
@@ -850,6 +934,7 @@ async function addTempPdfsAction(input: { threadId: string; filePaths: string[] 
         const ev = JSON.parse(line);
         if (ev?.type === "file_done" && ev.name) docs.add(ev.name);
         log("info", `temp ingest event: ${ev?.type ?? "?"}`, preview(ev));
+        trackIngestEvent(ev);
         emitIngest({ ...ev, temp: true, threadId: input.threadId });
       } catch {
         emitLog(line);
@@ -859,6 +944,7 @@ async function addTempPdfsAction(input: { threadId: string; filePaths: string[] 
     proc.stderr.on("data", (d: Buffer) => { err = (err + d.toString()).slice(-1500); log("warn", "temp ingest stderr", preview(d.toString(), 500)); });
     proc.on("error", (e) => {
       log("error", "temp ingest spawn error", e.message);
+      track("ingest_failed", { kind: "spawn_failed" });
       emitIngest({ type: "ingest_error", temp: true, threadId: input.threadId, message: e.message });
     });
     proc.on("close", (code) => {
@@ -874,6 +960,7 @@ async function addTempPdfsAction(input: { threadId: string; filePaths: string[] 
       resolve();
     });
   });
+  if (docs.size > 0) track("chat_pdf_added", { count: docs.size });
   return { ok: docs.size > 0, docs: [...docs].sort() };
 }
 
@@ -916,6 +1003,22 @@ async function exportPdfAction(input: { html: string; title: string }): Promise<
   }
 }
 
+// Renderer-originated engagement events. Allowlisted so the renderer can only
+// emit these known, content-free names (defence-in-depth against ever shipping
+// document text through the analytics channel).
+const RENDERER_EVENTS = new Set([
+  "thread_created", "thread_deleted", "answer_regenerated", "thread_branched", "thread_search_used",
+]);
+function trackFromRenderer(event: string, props?: Record<string, string | number | boolean>): void {
+  if (!RENDERER_EVENTS.has(event)) { log("warn", `analytics: ignoring unknown renderer event "${event}"`); return; }
+  track(event, props);
+}
+
+function installUpdateAction(): boolean {
+  track("update_install_clicked");
+  return installDownloadedUpdate();
+}
+
 // --- tRPC router ------------------------------------------------------------
 const routerDeps: RouterDeps = {
   bus,
@@ -934,7 +1037,8 @@ const routerDeps: RouterDeps = {
   showThreadMenu: showThreadMenuAction,
   showModelMenu: showModelMenuAction,
   getUpdateState,
-  installUpdate: installDownloadedUpdate,
+  installUpdate: installUpdateAction,
+  track: trackFromRenderer,
 };
 const appRouter = createAppRouter(routerDeps);
 

@@ -38,6 +38,11 @@ export const api = {
   onServeLog: (cb: (line: string) => void) => { trpc.serveLog.subscribe(undefined, { onData: cb }); },
   onUpdateEvent: (cb: (s: UpdateState) => void) => { trpc.updateEvents.subscribe(undefined, { onData: cb }); },
   installUpdate: () => trpc.installUpdate.mutate(),
+  // Fire-and-forget engagement analytics. Pass counts/enums only — never content
+  // (thread titles, search queries, document names). Main allowlists event names.
+  track: (event: string, props?: Record<string, string | number | boolean>) => {
+    void trpc.track.mutate({ event, props }).catch(() => { /* analytics must never surface */ });
+  },
 };
 
 declare global {

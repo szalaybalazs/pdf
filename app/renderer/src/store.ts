@@ -140,7 +140,7 @@ function lastUserText(t: Thread): string {
 }
 
 // ---- thread actions --------------------------------------------------------
-export function newThread(): Thread {
+export function newThread(userInitiated = false): Thread {
   const t: Thread = {
     id: uid(), title: "New thread", messages: [], history: [],
     disabledDocs: [], tempDocs: [], busy: false,
@@ -151,6 +151,7 @@ export function newThread(): Thread {
   store.searchQuery = "";
   bump();
   persistThread(t);
+  if (userInitiated) api.track("thread_created");
   return t;
 }
 
@@ -162,6 +163,7 @@ export function selectThread(id: string): void {
 export function deleteThread(id: string): void {
   const i = store.threads.findIndex((t) => t.id === id);
   if (i < 0) return;
+  api.track("thread_deleted");
   api.sendRequest({ type: "temp_index_clear", threadId: id });
   store.threads.splice(i, 1);
   api.sendRequest({ type: "thread_delete", id });
@@ -275,6 +277,7 @@ export function regenerate(reqId: string): void {
   t.messages.splice(ui);           // drop the user turn + its (re)generated answer onward
   rebuildHistory(t);
   bump();
+  api.track("answer_regenerated");
   send(question);
 }
 
@@ -297,6 +300,7 @@ export function threadOff(reqId: string): void {
   store.activeId = nt.id;
   store.searchResults = null;
   store.searchQuery = "";
+  api.track("thread_branched");
   if ((t.tempDocs || []).length > 0) {
     api.sendRequest({ type: "temp_index_clone", fromThreadId: t.id, toThreadId: nt.id });
   }
@@ -312,7 +316,10 @@ export function setSearchQuery(q: string): void {
   clearTimeout(searchTimer);
   if (!trimmed) { store.searchResults = null; bump(); return; }
   bump();
-  searchTimer = setTimeout(() => api.sendRequest({ type: "thread_search", q: trimmed }), 200);
+  searchTimer = setTimeout(() => {
+    api.track("thread_search_used");   // count only — never the query text
+    api.sendRequest({ type: "thread_search", q: trimmed });
+  }, 200);
 }
 
 // ---- documents -------------------------------------------------------------

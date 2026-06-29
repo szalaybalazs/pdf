@@ -10,9 +10,10 @@ interface LocalModelForm {
   baseUrl: string;
   apiKey: string;
   model: string;
+  textOnly: boolean;
 }
 const DEFAULT_LOCAL_BASE_URL = "http://localhost:11434/v1";
-const blankLocalModel = (): LocalModelForm => ({ baseUrl: DEFAULT_LOCAL_BASE_URL, apiKey: "", model: "" });
+const blankLocalModel = (): LocalModelForm => ({ baseUrl: DEFAULT_LOCAL_BASE_URL, apiKey: "", model: "", textOnly: false });
 
 export function Settings() {
   const [openai, setOpenai] = useState("");
@@ -31,10 +32,12 @@ export function Settings() {
       setAnthropic(s.anthropicKey || "");
       setOpenrouter(s.openrouterKey || "");
       setSystemPrompt(s.systemPrompt || "");
-      const models = s.localModels?.length
-        ? s.localModels
+      const models: LocalModelForm[] = s.localModels?.length
+        ? s.localModels.map((m) => ({
+          baseUrl: m.baseUrl || "", apiKey: m.apiKey || "", model: m.model || "", textOnly: !!m.textOnly,
+        }))
         : (s.localBaseUrl || s.localApiKey || s.localModel
-          ? [{ baseUrl: s.localBaseUrl || "", apiKey: s.localApiKey || "", model: s.localModel || "" }]
+          ? [{ baseUrl: s.localBaseUrl || "", apiKey: s.localApiKey || "", model: s.localModel || "", textOnly: false }]
           : [blankLocalModel()]);
       setLocalModels(models);
       setDataDir(s.dataDir || "");
@@ -56,9 +59,9 @@ export function Settings() {
     setSaving(true);
     try {
       const cleanedLocalModels = localModels
-        .map((m) => ({ baseUrl: m.baseUrl.trim(), apiKey: m.apiKey.trim(), model: m.model.trim() }))
+        .map((m) => ({ baseUrl: m.baseUrl.trim(), apiKey: m.apiKey.trim(), model: m.model.trim(), textOnly: m.textOnly }))
         .filter((m) => m.model);
-      const firstLocal = cleanedLocalModels[0] || { baseUrl: "", apiKey: "", model: "" };
+      const firstLocal = cleanedLocalModels[0] || { baseUrl: "", apiKey: "", model: "", textOnly: false };
       await api.setSettings({
         openaiKey: openai.trim(), anthropicKey: anthropic.trim(), openrouterKey: openrouter.trim(),
         systemPrompt: systemPrompt.trim(),
@@ -134,6 +137,15 @@ export function Settings() {
             <label className={labelCls}>API key (optional)</label>
             <input className={inputCls} type="password" autoComplete="off" spellCheck={false}
               placeholder="local" value={local.apiKey} onChange={(e) => updateLocalModel(i, { apiKey: e.target.value })} />
+
+            <label className="mt-2.5 flex items-center gap-2 text-[12px] text-ink">
+              <input type="checkbox" checked={local.textOnly}
+                onChange={(e) => updateLocalModel(i, { textOnly: e.target.checked })} />
+              Text-only model (no image input)
+            </label>
+            <div className="mt-1 text-[11px] leading-snug text-faint">
+              Check this for models without vision (e.g. GLM). Page images are skipped — it answers from the passage text alone.
+            </div>
           </div>
         ))}
 

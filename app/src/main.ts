@@ -269,6 +269,7 @@ function backendEnv(): NodeJS.ProcessEnv {
       base_url: m.baseUrl.trim() || settings.localBaseUrl.trim() || DEFAULT_LOCAL_BASE_URL,
       api_key: m.apiKey.trim() || "local",
       model: m.model.trim(),
+      text_only: !!m.textOnly,
     }))
     .filter((m) => m.model);
   if (!localModels.length && settings.localModel.trim()) {
@@ -276,6 +277,7 @@ function backendEnv(): NodeJS.ProcessEnv {
       base_url: settings.localBaseUrl.trim() || DEFAULT_LOCAL_BASE_URL,
       api_key: settings.localApiKey.trim() || "local",
       model: settings.localModel.trim(),
+      text_only: false,
     });
   }
   if (localModels.length) {
@@ -570,6 +572,7 @@ function modelProviderLabel(provider: string): string {
   switch (provider) {
     case "openai": return "OpenAI";
     case "anthropic": return "Anthropic";
+    case "zai": return "Z.ai";
     case "local": return "Local";
     case "cli": return "Local CLI";
     default: return provider ? provider[0].toUpperCase() + provider.slice(1) : "Other";
@@ -652,6 +655,7 @@ async function setSettingsAction(s: Settings): Promise<{ ok: boolean }> {
       baseUrl: m.baseUrl || "",
       apiKey: m.apiKey || "",
       model: m.model || "",
+      textOnly: !!m.textOnly,
     })),
   });
   restartBackend(); // respawn so the Python backend picks up the new keys

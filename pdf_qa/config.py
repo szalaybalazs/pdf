@@ -68,6 +68,12 @@ ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-opus-4-8")
 ANTHROPIC_SONNET_MODEL = os.getenv("ANTHROPIC_SONNET_MODEL", "claude-sonnet-4-6")
 ANTHROPIC_MAX_TOKENS = int(os.getenv("ANTHROPIC_MAX_TOKENS", "4096"))
 
+# GLM (Zhipu AI), a text-only answerer served via OpenRouter. It has no vision
+# input, so the index's page images are never sent — it answers from the
+# retrieved passage text alone (the calculate / search / get_pages tools still
+# work). Only offered when OpenRouter is enabled (no native GLM code path).
+GLM_MODEL = os.getenv("GLM_MODEL", "z-ai/glm-5.2")
+
 
 def _bool_env(name: str, default: bool) -> bool:
     v = os.getenv(name)
@@ -133,12 +139,17 @@ def _local_model_specs() -> dict[str, dict]:
         api_key = str(item.get("api_key") or item.get("apiKey") or "local").strip() or "local"
         if not model:
             continue
+        # A text-only local model (no vision input) is flagged so the answerer
+        # skips page images and uses the text-only system prompt.
+        text_only = bool(item.get("text_only") or item.get("textOnly"))
         base_id = "local-" + "".join(ch if ch.isalnum() else "-" for ch in model.lower()).strip("-")
         base_id = base_id or "local"
         seen[base_id] = seen.get(base_id, 0) + 1
         mid = base_id if seen[base_id] == 1 else f"{base_id}-{seen[base_id]}"
-        out[mid] = {"label": f"Local · {model}", "provider": "local",
-                    "model": model, "openrouter": "", "base_url": base_url, "api_key": api_key}
+        label = f"Local · {model}" + (" (text only)" if text_only else "")
+        out[mid] = {"label": label, "provider": "local", "model": model,
+                    "openrouter": "", "base_url": base_url, "api_key": api_key,
+                    "vision": not text_only}
     return out
 
 # Selectable answerer models offered in the UI. Each id maps to a provider, the
@@ -166,6 +177,13 @@ if USE_OPENROUTER:
     MODELS["gpt55-direct"] = {"label": f"OpenAI · {OPENAI_FRONTIER_MODEL} (direct)",
                               "provider": "openai", "model": OPENAI_FRONTIER_MODEL,
                               "openrouter": "", "direct": True}
+    # GLM (Z.ai) is text-only and reachable only through OpenRouter, so it's offered
+    # only when OpenRouter is on. Its own "zai" provider keeps it distinct from the
+    # OpenAI options; the dispatcher still routes it through the OpenAI-compatible
+    # OpenRouter path (any non-cli/local/anthropic provider falls through there).
+    # `vision: False` makes the answerer drop page images.
+    MODELS["glm"] = {"label": f"Z.ai · {GLM_MODEL} (text only){_via}", "provider": "zai",
+                     "model": GLM_MODEL, "openrouter": GLM_MODEL, "vision": False}
 # Which model is selected by default (must be a key of MODELS).
 DEFAULT_MODEL = os.getenv("ANSWER_MODEL", "openai")
 if DEFAULT_MODEL not in MODELS:
@@ -191,3 +209,10 @@ def resolve_model(model_id: str | None) -> dict:
     """Return the {label, provider, model} spec for a UI model id, falling back
     to the configured default when the id is unknown or missing."""
     return MODELS.get(model_id) or MODELS[DEFAULT_MODEL]
+
+
+def model_supports_vision(spec: dict) -> bool:
+    """Whether a model spec accepts image input. Defaults to True so every
+    existing model keeps sending page images; only specs that explicitly set
+    `vision: False` (GLM, text-only local models) take the text-only path."""
+    return bool(spec.get("vision", True))

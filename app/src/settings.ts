@@ -28,6 +28,9 @@ export interface LocalModelSettings {
   baseUrl: string;
   apiKey: string;
   model: string;
+  // Text-only model (no vision input): the answerer skips page images and uses
+  // the text-only system prompt. Defaults to false (vision on).
+  textOnly: boolean;
 }
 
 function settingsPath(): string {
@@ -49,6 +52,7 @@ export function readSettings(): Settings {
         baseUrl: typeof m?.baseUrl === "string" ? m.baseUrl : "",
         apiKey: dec(m?.apiKey),
         model: typeof m?.model === "string" ? m.model : "",
+        textOnly: !!m?.textOnly,
       })).filter((m: LocalModelSettings) => m.baseUrl || m.apiKey || m.model)
       : [];
     if (!localModels.length && (obj.localBaseUrl || obj.localApiKey || obj.localModel)) {
@@ -56,9 +60,10 @@ export function readSettings(): Settings {
         baseUrl: typeof obj.localBaseUrl === "string" ? obj.localBaseUrl : "",
         apiKey: dec(obj.localApiKey),
         model: typeof obj.localModel === "string" ? obj.localModel : "",
+        textOnly: false,
       });
     }
-    const firstLocal = localModels[0] || { baseUrl: "", apiKey: "", model: "" };
+    const firstLocal = localModels[0] || { baseUrl: "", apiKey: "", model: "", textOnly: false };
     return {
       openaiKey: dec(obj.openaiKey),
       anthropicKey: dec(obj.anthropicKey),
@@ -94,6 +99,7 @@ export function writeSettings(s: Settings): void {
       baseUrl: m.baseUrl || "",
       apiKey: encv(m.apiKey || ""),
       model: m.model || "",
+      textOnly: !!m.textOnly,
     })),
   };
   fs.writeFileSync(settingsPath(), JSON.stringify(obj, null, 2), { mode: 0o600 });

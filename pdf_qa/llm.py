@@ -188,6 +188,57 @@ SYSTEM_PROMPT = (
 )
 
 
+# Text-only variant for models without vision input (GLM, text-only local models).
+# Same grounding/calculation/citation rules, but it answers from the extracted
+# passage text alone — no page images — so the figure-reading guidance is dropped.
+TEXT_SYSTEM_PROMPT = (
+    "You are a precise technical assistant for engineering documents (textbooks and "
+    "datasheets). You are given extracted text passages from the actual document pages.\n"
+    "GROUNDING — THIS IS ABSOLUTE:\n"
+    "• Answer ONLY from the provided document passages. Do not use outside/background "
+    "knowledge, do not guess, do not assume, and NEVER make anything up. Every fact, "
+    "value and equation you cite must come from the passages.\n"
+    "• You MAY apply an equation, method or worked example THAT THE PASSAGES PROVIDE to "
+    "the user's specific numbers — that is derivation from the source, not guessing. But "
+    "you may NOT invent values, assume unstated parameters, or substitute knowledge the "
+    "documents don't contain.\n"
+    "• You do NOT receive page images, so you cannot read charts, schematics or figures "
+    "directly. If answering needs a value that lives only in a figure/diagram, say so "
+    "explicitly rather than guessing it.\n"
+    "• If you are not sure you have all the relevant passages, FETCH MORE before "
+    "concluding anything: use `search_documents` to find related passages by meaning, and "
+    "use `get_pages` to pull a SPECIFIC page's text by number when a passage points to one "
+    "(e.g. 'see Table 3.2 on p.112') or when you need the page just before/after the one "
+    "you're reading. Use them as many times as needed.\n"
+    "• If, after searching, the documents do NOT contain the needed data or a method to "
+    "derive it, DO NOT guess. Say plainly: \"Not enough data available in the documents\" "
+    "(or similar), state exactly what is missing, and ask the user the specific question(s) "
+    "or for the specific input that would let you proceed. It is correct and expected to "
+    "ask for clarification rather than assume.\n"
+    "• If a parameter the user gave is ambiguous or a question is unclear, ask a "
+    "clarifying question instead of guessing what they meant.\n"
+    "• Cite sources inline as (filename p.N) for every claim.\n"
+    "CALCULATIONS — THIS IS MANDATORY AND NON-NEGOTIABLE:\n"
+    "• Use the `calculate` tool for EVERY single piece of arithmetic, no matter how "
+    "trivial — additions, subtractions, multiplications, divisions, powers, roots, logs, "
+    "unit conversions, percentages, averages, ratios, everything. If a number in your "
+    "answer is the result of ANY computation, it MUST come from a `calculate` call. NEVER "
+    "do arithmetic in your head, and never write a computed number you did not get from "
+    "the tool.\n"
+    "• Prefer MORE tool calls over fewer: break a multi-step calculation into one "
+    "`calculate` call per step so each intermediate value is independently tool-verified.\n"
+    "• ALWAYS SHOW every calculation explicitly: state the formula, substitute the actual "
+    "numbers, and write the exact value the tool returned (with units). Never hide a "
+    "calculation or present only the final number.\n"
+    "• ALWAYS VERIFY every result: confirm the units are right and the magnitude is "
+    "sensible, and wherever possible plug the value back into the relation (via another "
+    "`calculate` call) to confirm it holds. State the verification explicitly.\n"
+    "• Present every number EXACTLY as the tool returned it so it can be checked.\n"
+    "Format answers in Markdown. Write equations in LaTeX using \\( \\) for inline and "
+    "\\[ \\] for display math."
+)
+
+
 THINK_INSTRUCTION = (
     "\n\nBefore answering, reason step by step inside <thinking>...</thinking> tags: "
     "describe what you see in the page images (curve shapes, axis values, schematic "
@@ -196,12 +247,21 @@ THINK_INSTRUCTION = (
 )
 
 
-def _system_prompt(think: bool = False) -> str:
-    system = SYSTEM_PROMPT
+# Same as THINK_INSTRUCTION but for the text-only path — there are no page images
+# to describe, so it reasons over the passages instead.
+TEXT_THINK_INSTRUCTION = (
+    "\n\nBefore answering, reason step by step inside <thinking>...</thinking> tags: "
+    "identify which passages are relevant, which equations apply, and any calculation "
+    "you do. After the closing </thinking> tag, give the final answer for the user."
+)
+
+
+def _system_prompt(think: bool = False, vision: bool = True) -> str:
+    system = SYSTEM_PROMPT if vision else TEXT_SYSTEM_PROMPT
     if config.CUSTOM_SYSTEM_PROMPT:
         system += f"\n\nAdditional user-provided system instructions:\n{config.CUSTOM_SYSTEM_PROMPT}"
     if think:
-        system += THINK_INSTRUCTION
+        system += THINK_INSTRUCTION if vision else TEXT_THINK_INSTRUCTION
     return system
 
 
@@ -220,7 +280,10 @@ def _followup_note(history, has_images: bool) -> str:
              "No page images are attached for this follow-up. ") + base)
 
 
-def _build_messages(question, contexts, image_paths, history, think) -> list[dict]:
+def _build_messages(question, contexts, image_paths, history, think, vision=True) -> list[dict]:
+    # A text-only model gets no page images regardless of what was retrieved.
+    if not vision:
+        image_paths = []
     text_block = "\n\n".join(
         f"[Passage {i+1}] ({c['doc']} p.{c['page']})\n{c['text']}"
         for i, c in enumerate(contexts)
@@ -234,7 +297,7 @@ def _build_messages(question, contexts, image_paths, history, think) -> list[dic
         content.append({"type": "image_url",
                         "image_url": {"url": _image_data_url(p, config.VISION_MAX_DIM)}})
 
-    messages = [{"role": "system", "content": _system_prompt(think)}]
+    messages = [{"role": "system", "content": _system_prompt(think, vision)}]
     if history:
         messages.extend(history)
     messages.append({"role": "user", "content": content})
@@ -609,6 +672,8 @@ def answer_stream(question: str, contexts: list[dict], image_paths: list[str],
     tool use, then {"type":"final","text","usage","calculations",...}.
     """
     spec = config.resolve_model(model)
+    # Text-only models (GLM, text-only local models) never receive page images.
+    vision = config.model_supports_vision(spec)
     # Local CLI models run on the machine (no API) — handle before any remote path.
     if spec["provider"] == "cli":
         yield from _answer_stream_cli(question, contexts, image_paths, history, think, spec["model"])
@@ -618,28 +683,30 @@ def answer_stream(question: str, contexts: list[dict], image_paths: list[str],
     # (OpenRouter routing never applies to a local model).
     if spec["provider"] == "local":
         yield from _answer_stream_openai(question, contexts, image_paths, history,
-                                         think, spec["model"], searcher, pager, spec=spec)
+                                         think, spec["model"], searcher, pager, spec=spec, vision=vision)
         return
     # Direct-to-OpenAI override: send the native model id straight to OpenAI,
     # skipping OpenRouter even when it's globally enabled.
     if spec.get("direct"):
         yield from _answer_stream_openai(question, contexts, image_paths, history,
-                                         think, spec["model"], searcher, pager, spec=spec)
+                                         think, spec["model"], searcher, pager, spec=spec, vision=vision)
         return
     # When OpenRouter is on, everything (incl. Claude) goes through the OpenAI-
     # compatible path; otherwise Anthropic uses its native SDK path.
     if not config.USE_OPENROUTER and spec["provider"] == "anthropic":
         yield from _answer_stream_anthropic(question, contexts, image_paths,
-                                            history, think, spec["model"], searcher, pager)
+                                            history, think, spec["model"], searcher, pager, vision=vision)
     else:
         yield from _answer_stream_openai(question, contexts, image_paths,
-                                         history, think, _chat_model_id(spec), searcher, pager)
+                                         history, think, _chat_model_id(spec), searcher, pager, vision=vision)
 
 
 def _answer_stream_openai(question: str, contexts: list[dict], image_paths: list[str],
                           history: list[dict] | None, think: bool, model: str,
-                          searcher=None, pager=None, spec: dict | None = None):
+                          searcher=None, pager=None, spec: dict | None = None, vision: bool = True):
     import time
+    if not vision:
+        image_paths = []   # text-only model — never send page images
     client = _chat_client(spec)
     # OpenRouter is the active route unless this is the direct-to-OpenAI override or
     # a local server. Only over OpenRouter do we get (and ask for) reasoning deltas.
@@ -651,7 +718,7 @@ def _answer_stream_openai(question: str, contexts: list[dict], image_paths: list
     # would gate the visible answer behind a long emitted block).
     if reasoning_model:
         think = False
-    messages = _build_messages(question, contexts, image_paths, history, think)
+    messages = _build_messages(question, contexts, image_paths, history, think, vision)
     tools = [CALC_TOOL] + ([SEARCH_TOOL] if searcher else []) + ([GET_PAGES_TOOL] if pager else [])
     t0 = time.time()
     content_all: list = []
@@ -762,7 +829,7 @@ def _answer_stream_openai(question: str, contexts: list[dict], image_paths: list
                     yield {"type": "tool_call", "name": "calculate", "args": last["expression"],
                            "ok": last["ok"], "result": last["result"] or last["error"]}
                 messages.append({"role": "tool", "tool_call_id": cid, "content": res})
-        if new_images:   # OpenAI: images can't ride in tool results, so add a user turn
+        if new_images and vision:   # OpenAI: images can't ride in tool results, so add a user turn
             content = [{"type": "text", "text": "Additional page images you requested:"}]
             for p in new_images:
                 content.append({"type": "image_url",
@@ -864,10 +931,12 @@ def _answer_stream_cli(question: str, contexts: list[dict], image_paths: list[st
 
 # ---- Anthropic (Claude) path ------------------------------------------------
 
-def _build_anthropic_messages(question, contexts, image_paths, history) -> list[dict]:
+def _build_anthropic_messages(question, contexts, image_paths, history, vision=True) -> list[dict]:
     """Anthropic puts the system prompt in its own parameter and uses content
     blocks with base64 image sources, so we build messages separately from the
     OpenAI path (the prompt text and tool are shared)."""
+    if not vision:
+        image_paths = []
     text_block = "\n\n".join(
         f"[Passage {i+1}] ({c['doc']} p.{c['page']})\n{c['text']}"
         for i, c in enumerate(contexts)
@@ -890,12 +959,14 @@ def _build_anthropic_messages(question, contexts, image_paths, history) -> list[
 
 def _answer_stream_anthropic(question: str, contexts: list[dict], image_paths: list[str],
                              history: list[dict] | None, think: bool, model: str,
-                             searcher=None, pager=None):
+                             searcher=None, pager=None, vision: bool = True):
     import json
     import time
+    if not vision:
+        image_paths = []
     client = _anthropic_client()
-    messages = _build_anthropic_messages(question, contexts, image_paths, history)
-    system = _system_prompt(think)
+    messages = _build_anthropic_messages(question, contexts, image_paths, history, vision)
+    system = _system_prompt(think, vision)
     tools = ([ANTHROPIC_CALC_TOOL]
              + ([ANTHROPIC_SEARCH_TOOL] if searcher else [])
              + ([ANTHROPIC_GET_PAGES_TOOL] if pager else []))
@@ -952,9 +1023,9 @@ def _answer_stream_anthropic(question: str, contexts: list[dict], image_paths: l
                     yield {"type": "tool_call", "name": "search_documents",
                            "args": str((block.input or {}).get("query", "")),
                            "ok": True, "result": f"{res['n']} passage(s), {len(imgs)} new page(s)"}
-                # Anthropic tool_result may carry image blocks directly.
+                # Anthropic tool_result may carry image blocks directly (vision only).
                 content_blocks: list = [{"type": "text", "text": res["text"]}]
-                for p in imgs:
+                for p in (imgs if vision else []):
                     content_blocks.append({"type": "image", "source": {
                         "type": "base64", "media_type": "image/jpeg",
                         "data": _image_jpeg_b64(p, config.VISION_MAX_DIM)}})

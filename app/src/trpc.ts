@@ -16,7 +16,7 @@ export interface AppSettings {
   localBaseUrl: string; localApiKey: string; localModel: string; dataDir?: string;
   localModels: LocalModelSettings[];
 }
-export interface LocalModelSettings { baseUrl: string; apiKey: string; model: string; }
+export interface LocalModelSettings { baseUrl: string; apiKey: string; model: string; textOnly: boolean; }
 export interface ModelMenuItem { id: string; label: string; provider?: string; model?: string; via_openrouter?: boolean; }
 
 // Auto-update state pushed to the renderer (drives the sidebar "Restart to
@@ -63,6 +63,7 @@ const keys = z.object({
     baseUrl: z.string(),
     apiKey: z.string(),
     model: z.string(),
+    textOnly: z.boolean().default(false),
   })).default([]),
 });
 

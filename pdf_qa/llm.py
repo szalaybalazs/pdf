@@ -74,12 +74,24 @@ def _bedrock_runtime_client():
     return boto3.client("bedrock-runtime", region_name=config.BEDROCK_REGION)
 
 
+def _openrouter_client():
+    from openai import OpenAI
+    if not config.OPENROUTER_API_KEY:
+        raise RuntimeError(
+            "OPENROUTER_API_KEY is not set. Add it in Settings or .env, or set "
+            "USE_OPENROUTER=false to use the providers directly."
+        )
+    return OpenAI(api_key=config.OPENROUTER_API_KEY, base_url=config.OPENROUTER_BASE_URL,
+                  default_headers={"HTTP-Referer": "https://github.com/pdf_qa",
+                                   "X-Title": "pdf_qa"})
+
+
 def _chat_client(spec: dict | None = None):
     """OpenAI-compatible client for chat/vision/title calls. A "local" spec points
     at LOCAL_BASE_URL; a "bedrock" spec at the bedrock-mantle gateway; otherwise
     routes through OpenRouter when enabled, else the direct OpenAI API. (Embeddings
-    always use the direct OpenAI client via _client() — neither OpenRouter, local
-    servers, nor Bedrock serve our embedding model.)"""
+    use _embed_client(): the direct OpenAI client when OPENAI_API_KEY is set, else
+    an OpenRouter fallback — local servers and Bedrock never serve embeddings.)"""
     if spec and spec.get("provider") == "local":
         return _local_client(spec)
     if spec and spec.get("provider") == "bedrock":
@@ -87,15 +99,7 @@ def _chat_client(spec: dict | None = None):
     if spec and spec.get("direct"):
         return _client()   # force direct OpenAI even when OpenRouter is globally on
     if config.USE_OPENROUTER:
-        from openai import OpenAI
-        if not config.OPENROUTER_API_KEY:
-            raise RuntimeError(
-                "OPENROUTER_API_KEY is not set. Add it in Settings or .env, or set "
-                "USE_OPENROUTER=false to use the providers directly."
-            )
-        return OpenAI(api_key=config.OPENROUTER_API_KEY, base_url=config.OPENROUTER_BASE_URL,
-                      default_headers={"HTTP-Referer": "https://github.com/pdf_qa",
-                                       "X-Title": "pdf_qa"})
+        return _openrouter_client()
     return _client()
 
 
@@ -105,13 +109,28 @@ def _chat_model_id(spec: dict) -> str:
     return spec["openrouter"] if config.USE_OPENROUTER else spec["model"]
 
 
+def _embed_client():
+    """(client, model_id) for embeddings. Prefers the direct OpenAI key; when it's
+    unset, falls back to OpenRouter's OpenAI-compatible /embeddings endpoint, which
+    serves text-embedding-3-small under an `openai/…` slug. The index and queries
+    must use the SAME embedder, so don't switch keys between ingest and search."""
+    if config.OPENAI_API_KEY:
+        return _client(), config.EMBED_MODEL
+    if config.OPENROUTER_API_KEY:
+        return _openrouter_client(), config.EMBED_OPENROUTER_MODEL
+    raise RuntimeError(
+        "No embedding key set. Set OPENAI_API_KEY (preferred), or OPENROUTER_API_KEY "
+        "to embed via OpenRouter. Embeddings are required to build and search the index."
+    )
+
+
 def embed_texts(texts: list[str]) -> np.ndarray:
     """Embed a list of texts, batching to stay within request limits."""
-    client = _client()
+    client, model = _embed_client()
     out: list[list[float]] = []
     for i in range(0, len(texts), config.EMBED_BATCH):
         batch = texts[i : i + config.EMBED_BATCH]
-        resp = client.embeddings.create(model=config.EMBED_MODEL, input=batch)
+        resp = client.embeddings.create(model=model, input=batch)
         out.extend([d.embedding for d in resp.data])
     return np.asarray(out, dtype=np.float32)
 
@@ -127,12 +146,20 @@ _TITLE_SYSTEM = (
 )
 
 
+def _title_client():
+    """(client, model_id) for the cheap thread-title call. Routes through OpenRouter
+    when it's enabled, OR as a fallback when no OPENAI_API_KEY is set but an
+    OpenRouter key is — otherwise the direct OpenAI API (matching embeddings)."""
+    if config.USE_OPENROUTER or (not config.OPENAI_API_KEY and config.OPENROUTER_API_KEY):
+        return _openrouter_client(), f"openai/{config.SUMMARY_MODEL}"
+    return _client(), config.SUMMARY_MODEL
+
+
 def summarize_title(question: str, answer: str) -> str:
     """Summarise the first exchange into a short thread title using the small,
     cheap SUMMARY_MODEL. Best-effort: returns "" on any failure so the caller can
     fall back to a placeholder."""
-    client = _chat_client()
-    model = f"openai/{config.SUMMARY_MODEL}" if config.USE_OPENROUTER else config.SUMMARY_MODEL
+    client, model = _title_client()
     # The title is generated as soon as the first question is sent, so `answer`
     # is usually empty — title from the question alone, and only include the
     # assistant turn when one was actually provided.

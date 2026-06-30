@@ -42,6 +42,11 @@ def resolve_image(p: str) -> str:
 CUSTOM_SYSTEM_PROMPT = os.getenv("PDF_QA_SYSTEM_PROMPT", "").strip()
 
 EMBED_MODEL = os.getenv("EMBED_MODEL", "text-embedding-3-small")  # cheap, 1536-d
+# OpenRouter slug for the same embedder, used as a fallback when no OPENAI_API_KEY
+# is set (OpenRouter now serves an OpenAI-compatible /embeddings endpoint). The
+# index and queries MUST share an embedder, so this should resolve to the same
+# underlying model as EMBED_MODEL.
+EMBED_OPENROUTER_MODEL = os.getenv("EMBED_OPENROUTER_MODEL", f"openai/{EMBED_MODEL}")
 # Small/cheap model used only to summarise a chat into a short thread title.
 # Always OpenAI (its key is required for embeddings regardless of the answerer).
 SUMMARY_MODEL = os.getenv("SUMMARY_MODEL", "gpt-4o-mini")
@@ -86,8 +91,9 @@ def _bool_env(name: str, default: bool) -> bool:
 # --- OpenRouter --------------------------------------------------------------
 # OpenRouter (https://openrouter.ai) is an OpenAI-compatible gateway that serves
 # both GPT and Claude through one key/endpoint. When enabled, all chat/vision/
-# title calls route through it. NOTE: OpenRouter has no embeddings endpoint, so
-# embeddings (PDF index + thread search) still use the direct OPENAI_API_KEY.
+# title calls route through it. Embeddings (PDF index + thread search) prefer the
+# direct OPENAI_API_KEY, but fall back to OpenRouter's OpenAI-compatible
+# /embeddings endpoint (EMBED_OPENROUTER_MODEL) when no OpenAI key is set.
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 USE_OPENROUTER = _bool_env("USE_OPENROUTER", bool(OPENROUTER_API_KEY))
@@ -112,6 +118,7 @@ BEDROCK_OPUS_MODEL = os.getenv("BEDROCK_OPUS_MODEL", "anthropic.claude-opus-4-8"
 BEDROCK_SONNET_MODEL = os.getenv("BEDROCK_SONNET_MODEL", "anthropic.claude-sonnet-4-6")
 BEDROCK_GLM_MODEL = os.getenv("BEDROCK_GLM_MODEL", "zai.glm-5")
 BEDROCK_DEEPSEEK_MODEL = os.getenv("BEDROCK_DEEPSEEK_MODEL", "deepseek.v3.2")
+BEDROCK_KIMI_MODEL = os.getenv("BEDROCK_KIMI_MODEL", "moonshotai.kimi-k2.5")
 
 
 def bedrock_base_url() -> str:
@@ -257,6 +264,9 @@ if USE_BEDROCK:
     # DeepSeek V3.2 — Chat Completions on mantle, text-only (no image input).
     MODELS["bedrock-deepseek"] = {"label": "Bedrock · DeepSeek V3.2 (text only)", "provider": "bedrock",
                                   "model": BEDROCK_DEEPSEEK_MODEL, "openrouter": "", "api": "chat", "vision": False}
+    # Kimi K2.5 — Chat Completions on mantle, multimodal (accepts page images).
+    MODELS["bedrock-kimi"] = {"label": "Bedrock · Kimi K2.5", "provider": "bedrock",
+                              "model": BEDROCK_KIMI_MODEL, "openrouter": "", "api": "chat", "vision": True}
 
 # Which model is selected by default (must be a key of MODELS).
 DEFAULT_MODEL = os.getenv("ANSWER_MODEL", "openai")

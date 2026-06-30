@@ -5,6 +5,7 @@ import {
   docEnabled, enabledDocs, setAllDocsEnabled, setDocEnabled, threadDocs,
   installUpdate, showThreadMenu,
 } from "../store";
+import type { Thread } from "../types";
 
 function SearchIcon() {
   return (
@@ -144,9 +145,47 @@ function SidebarSpinner() {
 const iconBtn = "flex h-[24px] w-[24px] items-center justify-center rounded-md text-faint transition-colors hover:bg-bg hover:text-ink";
 const navRow = "flex h-[34px] w-full items-center gap-2 rounded-lg px-2.5 text-left text-[13.5px] text-muted transition hover:bg-bg hover:text-ink";
 
+interface ThreadGroup { label: string; threads: Thread[]; }
+
+function startOfDay(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+function daysAgo(timestamp: number, now = new Date()): number {
+  const then = new Date(timestamp);
+  return Math.floor((startOfDay(now).getTime() - startOfDay(then).getTime()) / 86_400_000);
+}
+
+function threadTime(t: Thread): number {
+  return t.updatedAt || t.createdAt || 0;
+}
+
+function threadGroupLabel(t: Thread): string {
+  const age = daysAgo(threadTime(t));
+  if (age <= 0) return "Today";
+  if (age === 1) return "Yesterday";
+  if (age <= 7) return "Last week";
+  if (age <= 31) return "Last month";
+  if (age <= 365) return "This year";
+  return "Older";
+}
+
+function groupThreadsByDate(threads: Thread[]): ThreadGroup[] {
+  const labels = ["Today", "Yesterday", "Last week", "Last month", "This year", "Older"];
+  const groups = new Map<string, Thread[]>();
+  for (const t of threads) {
+    const label = threadGroupLabel(t);
+    groups.set(label, [...(groups.get(label) || []), t]);
+  }
+  return labels
+    .map((label) => ({ label, threads: groups.get(label) || [] }))
+    .filter((group) => group.threads.length > 0);
+}
+
 export function Sidebar() {
   const [docsOpen, setDocsOpen] = useState(true);
   const threads = visibleThreads();
+  const threadGroups = groupThreadsByDate(threads);
   const searching = store.searchResults !== null;
   const working = !store.ready || !!store.ingest.text || !!activeThread()?.busy;
   const docs = threadDocs();
@@ -177,31 +216,38 @@ export function Sidebar() {
       <div className="mb-2 px-2 text-[13px] text-faint">Conversations</div>
       <ul className="min-h-0 flex-1 list-none overflow-y-auto pr-1">
         {searching && threads.length === 0 && <li className="px-2.5 py-2 text-[12.5px] text-faint">No matching chats</li>}
-        {threads.map((t) => {
-          const active = t.id === store.activeId;
-          const threadedOff = !!t.branchedFromThreadId || /\s↳ branch$/.test(t.title);
-          return (
-            <li
-              key={t.id}
-              className={`group mb-px flex h-[32px] cursor-pointer items-center gap-2 rounded-lg pl-2.5 pr-1.5 text-[13px] transition-colors ${active ? "bg-bg font-medium text-ink shadow-[0_1px_2px_rgba(20,20,18,0.03)]" : "text-muted hover:bg-bg hover:text-ink"}`}
-              onClick={() => selectThread(t.id)}
-              onContextMenu={(e) => { e.preventDefault(); selectThread(t.id); showThreadMenu(t.id); }}
-            >
-              {t.busy && <SidebarSpinner />}
-              {!t.busy && threadedOff && (
-                <span className="shrink-0 text-faint" title="Threaded off from another chat">
-                  <BranchIcon />
-                </span>
-              )}
-              <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{t.title}</span>
-              <button
-                className="flex h-[20px] w-[20px] items-center justify-center rounded text-faint opacity-0 transition-opacity hover:!text-danger hover:bg-surface-2 group-hover:opacity-70"
-                title="Delete chat"
-                onClick={(e) => { e.stopPropagation(); deleteThread(t.id); }}
-              ><XIcon /></button>
+        {threadGroups.map((group) => (
+          <React.Fragment key={group.label}>
+            <li className="px-2.5 pb-1 pt-2 text-[11px] font-medium uppercase text-faint">
+              {group.label}
             </li>
-          );
-        })}
+            {group.threads.map((t) => {
+              const active = t.id === store.activeId;
+              const threadedOff = !!t.branchedFromThreadId || /\s↳ branch$/.test(t.title);
+              return (
+                <li
+                  key={t.id}
+                  className={`group mb-px flex h-[32px] cursor-pointer items-center gap-2 rounded-lg pl-2.5 pr-1.5 text-[13px] transition-colors ${active ? "bg-bg font-medium text-ink shadow-[0_1px_2px_rgba(20,20,18,0.03)]" : "text-muted hover:bg-bg hover:text-ink"}`}
+                  onClick={() => selectThread(t.id)}
+                  onContextMenu={(e) => { e.preventDefault(); selectThread(t.id); showThreadMenu(t.id); }}
+                >
+                  {t.busy && <SidebarSpinner />}
+                  {!t.busy && threadedOff && (
+                    <span className="shrink-0 text-faint" title="Threaded off from another chat">
+                      <BranchIcon />
+                    </span>
+                  )}
+                  <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{t.title}</span>
+                  <button
+                    className="flex h-[20px] w-[20px] items-center justify-center rounded text-faint opacity-0 transition-opacity hover:!text-danger hover:bg-surface-2 group-hover:opacity-70"
+                    title="Delete chat"
+                    onClick={(e) => { e.stopPropagation(); deleteThread(t.id); }}
+                  ><XIcon /></button>
+                </li>
+              );
+            })}
+          </React.Fragment>
+        ))}
       </ul>
 
       <div className="mt-3 flex items-center gap-1 px-1 pb-1 pt-2">

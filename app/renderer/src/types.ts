@@ -57,6 +57,8 @@ export type Msg = UserMsg | AssistantMsg;
 export interface Thread {
   id: string; title: string; messages: Msg[];
   history: { role: "user" | "assistant"; content: string }[];
+  createdAt?: number;
+  updatedAt?: number;
   disabledDocs?: string[];
   tempDocs?: string[];
   branchedFromThreadId?: string;

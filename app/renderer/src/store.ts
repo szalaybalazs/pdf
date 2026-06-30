@@ -131,6 +131,12 @@ function persistThread(t: Thread | undefined): void {
   });
 }
 
+function touchThread(t: Thread): void {
+  const now = Date.now();
+  t.createdAt ||= now;
+  t.updatedAt = now;
+}
+
 function lastUserText(t: Thread): string {
   for (let i = t.messages.length - 1; i >= 0; i--) {
     const m = t.messages[i];
@@ -141,8 +147,10 @@ function lastUserText(t: Thread): string {
 
 // ---- thread actions --------------------------------------------------------
 export function newThread(userInitiated = false): Thread {
+  const now = Date.now();
   const t: Thread = {
     id: uid(), title: "New thread", messages: [], history: [],
+    createdAt: now, updatedAt: now,
     disabledDocs: [], tempDocs: [], busy: false,
   };
   store.threads.unshift(t);
@@ -237,6 +245,7 @@ export function send(question: string): void {
   const isFirstMessage = t.messages.every((m) => m.kind !== "user");
 
   const reqId = uid();
+  touchThread(t);
   t.messages.push({ kind: "user", text: question });
   t.messages.push({ kind: "assistant", reqId, trace: [], done: false });
   t.busy = true;
@@ -292,6 +301,7 @@ export function threadOff(reqId: string): void {
     : JSON.parse(JSON.stringify(t.messages.slice(0, ai + 1)))) as typeof t.messages;
   const nt: Thread = {
     id: uid(), title: `${t.title} ↳ branch`, messages: slice, history: [],
+    createdAt: Date.now(), updatedAt: Date.now(),
     disabledDocs: [...(t.disabledDocs || [])], tempDocs: [...(t.tempDocs || [])], busy: false,
     branchedFromThreadId: t.id, branchedFromReqId: reqId,
   };
@@ -401,6 +411,9 @@ function updateTokenStats(u: Usage): void {
 function hydrateThreads(dumped: Thread[]): void {
   store.threads = [];
   for (const t of dumped) {
+    const now = Date.now();
+    t.createdAt ||= t.updatedAt || now;
+    t.updatedAt ||= t.createdAt;
     t.busy = false;
     if (store.docs.length) {
       t.disabledDocs = (t.disabledDocs || []).filter((d) => store.docs.includes(d));
@@ -521,10 +534,12 @@ export function handleServeEvent(ev: ServeEvent): void {
     thread.history.push({ role: "assistant", content: a.text });
     thread.history = thread.history.slice(-8);
     thread.busy = false;
+    touchThread(thread);
     persistThread(thread);
   } else if (ev.type === "error") {
     msg.error = (ev as BackendError).message; msg.done = true;
     thread.busy = false;
+    touchThread(thread);
     persistThread(thread);
   }
   bump();

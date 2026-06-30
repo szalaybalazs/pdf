@@ -81,8 +81,16 @@ class ThreadStore:
     # --- read --------------------------------------------------------------
     def dump(self) -> list[dict]:
         """All threads as full JSON objects, most-recently-updated first."""
-        rows = self.db.execute("SELECT data FROM threads ORDER BY updated DESC").fetchall()
-        return [json.loads(r["data"]) for r in rows]
+        rows = self.db.execute(
+            "SELECT data, created, updated FROM threads ORDER BY updated DESC"
+        ).fetchall()
+        threads = []
+        for r in rows:
+            data = json.loads(r["data"])
+            data.setdefault("createdAt", r["created"] * 1000)
+            data.setdefault("updatedAt", r["updated"] * 1000)
+            threads.append(data)
+        return threads
 
     def search(self, qvec: np.ndarray, top_k: int) -> list[dict]:
         """Cosine search over thread embeddings; returns [{id, title, score}]."""

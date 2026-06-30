@@ -1,7 +1,7 @@
 {
   "name": "pdf-qa-desktop",
   "productName": "PDF QA",
-  "version": "0.0.15",
+  "version": "0.0.16",
   "description": "Electron desktop shell for the pdf_qa multimodal chat (spawns the Python backend).",
   "author": "Balázs Szalay <balazs@szalay.me>",
   "main": "dist/main.js",
@@ -42,6 +42,7 @@
   },
   "dependencies": {
     "@aptabase/electron": "^0.3.1",
+    "@sentry/browser-utils": "^10.62.0",
     "@sentry/electron": "^7.14.0",
     "@trpc/client": "^10.45.4",
     "@trpc/server": "^10.45.4",

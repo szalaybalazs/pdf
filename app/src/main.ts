@@ -21,6 +21,7 @@ import { checkForUpdates, initAutoUpdater, installDownloadedUpdate, getUpdateSta
 import type { UpdateState } from "./trpc";
 import { APP_NAME } from "./branding";
 import { initAnalytics, setAnalyticsEnabled, track } from "./analytics";
+import { initErrorReporting, setErrorReportingEnabled, backendSentryEnv, recordLog } from "./errors";
 
 let win: BrowserWindow | null = null;
 let serve: ChildProcessWithoutNullStreams | null = null;
@@ -108,14 +109,17 @@ function openLog(): void {
 }
 
 function log(level: "info" | "warn" | "error", msg: string, extra?: unknown): void {
+  let line = msg;
   if (extra !== undefined) {
     let tail: string;
     try { tail = typeof extra === "string" ? extra : JSON.stringify(extra); }
     catch { tail = "[unserialisable]"; }
-    logger[level](`${msg} ${tail}`);
-  } else {
-    logger[level](msg);
+    line = `${msg} ${tail}`;
   }
+  logger[level](line);
+  // Forward to Sentry (stream to Logs + buffer for error context). No-op until
+  // Sentry has initialised and the user is opted in.
+  recordLog(level, line);
 }
 
 async function openLogsAction(): Promise<void> {
@@ -265,6 +269,9 @@ function backendEnv(): NodeJS.ProcessEnv {
   // defaults are handled in the backend. Setting the key enables the provider.
   if (settings.bedrockApiKey) env.BEDROCK_API_KEY = settings.bedrockApiKey;
   if (settings.bedrockRegion.trim()) env.BEDROCK_REGION = settings.bedrockRegion.trim();
+  // Let the backend report crashes/errors into the same Sentry project, but
+  // only while the user is opted in (and only if a DSN is configured at all).
+  Object.assign(env, backendSentryEnv(settings.analyticsEnabled !== false));
   if (settings.systemPrompt.trim()) env.PDF_QA_SYSTEM_PROMPT = settings.systemPrompt;
   // Local OpenAI-compatible server (Ollama, LM Studio, …). The backend offers
   // local answerers when a model is set. Blank row URLs fall back to Ollama's
@@ -758,11 +765,15 @@ function modelProviderLabel(provider: string): string {
   }
 }
 
+function platformMenuLabel(label: string): string {
+  return process.platform === "win32" ? label.replace(/\s*·\s*/g, " - ") : label;
+}
+
 function modelMenuLabel(model: { label: string; model?: string; provider?: string }): string {
   const provider = modelProviderLabel(model.provider || "");
   const prefix = `${provider} · `;
-  if (model.label.startsWith(prefix)) return model.label.slice(prefix.length).replace(/ · OpenRouter$/, "");
-  return model.model || model.label;
+  if (model.label.startsWith(prefix)) return platformMenuLabel(model.label.slice(prefix.length).replace(/ · OpenRouter$/, ""));
+  return platformMenuLabel(model.model || model.label);
 }
 
 async function showModelMenuAction(input: {
@@ -787,7 +798,7 @@ async function showModelMenuAction(input: {
     }
     const modelItems = (group: { models: typeof input.models }) => group.models.map((model) => ({
       label: modelMenuLabel(model),
-      type: "radio",
+      type: "checkbox",
       checked: model.id === input.selectedModel,
       click: () => {
         picked = model.id;
@@ -845,7 +856,8 @@ async function setSettingsAction(s: Settings): Promise<{ ok: boolean }> {
     bedrockRegion: s.bedrockRegion || "",
     analyticsEnabled: s.analyticsEnabled !== false,
   });
-  setAnalyticsEnabled(s.analyticsEnabled !== false);  // honor opt-in/out without a restart
+  setAnalyticsEnabled(s.analyticsEnabled !== false);       // honor opt-in/out without a restart
+  setErrorReportingEnabled(s.analyticsEnabled !== false);  // same toggle gates Sentry too
   // Which providers are configured + whether a custom prompt is set — booleans
   // and counts only, NEVER the key values or prompt text.
   track("settings_saved", {
@@ -1049,6 +1061,11 @@ const routerDeps: RouterDeps = {
 };
 const appRouter = createAppRouter(routerDeps);
 
+// Initialise crash reporting as early as possible so startup failures are
+// caught. Like analytics, the opt-out flag is applied once settings are
+// readable (inside the ready handler), before any event could be sent.
+initErrorReporting({ log });
+
 // Aptabase requires initialize() to run before the app `ready` event; it waits
 // for whenReady internally. The opt-out flag is applied once settings are
 // readable (inside the ready handler, before any event is tracked).
@@ -1058,7 +1075,9 @@ app.whenReady().then(() => {
   openLog();
   copyLegacyDataIfNeeded();
   cleanupTempThreadIndexes();
-  setAnalyticsEnabled(readSettings().analyticsEnabled);
+  const startupSettings = readSettings();
+  setAnalyticsEnabled(startupSettings.analyticsEnabled);
+  setErrorReportingEnabled(startupSettings.analyticsEnabled);
   track("app_started", { platform: process.platform, arch: process.arch });
   startBackend();
   installApplicationMenu();

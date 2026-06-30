@@ -33,6 +33,7 @@ import time
 from pathlib import Path
 
 from . import config
+from .errors import capture_exception, init_error_reporting
 from .store import VectorStore
 from .threads import ThreadStore
 
@@ -305,11 +306,17 @@ def handle_query(store: VectorStore | None, req: dict) -> None:
          [f"{final['n_images']} image(s) sent"], dbg, t0)
 
     thinking, ans = split_thinking(final["text"])
-    if not ans.strip() and thinking.strip():
+    if not ans.strip():
+        # No visible answer. This happens when a reasoning model (GLM) spends its
+        # whole token budget on hidden reasoning and is cut off before writing
+        # prose — the reasoning streams live but never lands in final["text"], so
+        # `thinking` here is usually empty too. The answerer now forces a final,
+        # reasoning-free turn to recover; if even that produced nothing, say so
+        # plainly instead of returning a blank answer (just the calc appendix).
         ans = (
-            "The selected model produced only hidden thinking and did not write a "
-            "final answer. Try sending the question again; GLM is now prompted to "
-            "answer directly instead of using hidden <thinking> blocks."
+            "The selected model finished without writing a final answer — it likely "
+            "spent its full token budget on hidden reasoning. Please send the "
+            "question again, or pick a different model."
         )
     # Some models emit tool calls inline as text (<tool_call>{...}</tool_call>)
     # instead of via the API. Strip those from the answer and execute any
@@ -354,6 +361,7 @@ def _run_query(store: VectorStore | None, req: dict) -> None:
     try:
         handle_query(store, req)
     except Exception as e:  # report, keep serving
+        capture_exception(e)
         emit({"type": "error", "reqId": req.get("reqId"), "message": str(e)})
 
 
@@ -434,6 +442,10 @@ def handle_threads(tstore: ThreadStore, req: dict) -> None:
 
 
 def main(argv=None) -> int:
+    # Idempotent: also called from backend_entry.py for packaged builds, but in
+    # dev the app launches `python -m pdf_qa.serve` directly, so init here too.
+    init_error_reporting()
+
     global SESSION_ID
     import uuid
     SESSION_ID = uuid.uuid4().hex[:12]
@@ -490,6 +502,7 @@ def main(argv=None) -> int:
                 store = VectorStore.load(config.STORE_PATH)
                 emit({"type": "ready", **_index_stats(store)})
             except Exception as e:  # noqa: BLE001
+                capture_exception(e)
                 emit({"type": "error", "message": f"reload failed: {e}"})
         elif kind == "doc_remove":
             doc = req.get("doc")
@@ -508,11 +521,13 @@ def main(argv=None) -> int:
                 emit({"type": "doc_removed", "doc": doc, "removed": removed})
                 emit({"type": "ready", **_index_stats(store)})
             except Exception as e:  # noqa: BLE001
+                capture_exception(e)
                 emit({"type": "error", "reqId": req.get("reqId"), "message": f"remove failed: {e}"})
         elif kind == "temp_index_add":
             try:
                 handle_temp_index(req)
             except Exception as e:  # noqa: BLE001
+                capture_exception(e)
                 emit({"type": "error", "reqId": req.get("reqId"), "message": f"temp index failed: {e}"})
         elif kind == "temp_index_clone":
             handle_temp_index_clone(req)
@@ -531,6 +546,7 @@ def main(argv=None) -> int:
             try:
                 handle_threads(tstore, req)
             except Exception as e:  # report, keep serving
+                capture_exception(e)
                 emit({"type": "error", "reqId": req.get("reqId"), "message": str(e)})
         else:
             emit({"type": "error", "message": f"unknown request type: {kind}"})

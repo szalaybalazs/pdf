@@ -51,5 +51,8 @@ declare global {
     pdfQaFiles?: {
       pathForFile: (file: File) => string;
     };
+    pdfQaApp?: {
+      platform: NodeJS.Platform;
+    };
   }
 }

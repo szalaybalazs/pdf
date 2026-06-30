@@ -513,11 +513,21 @@ def _reasoning_text(delta) -> str:
     return v if isinstance(v, str) else ""
 
 
+def _max_tokens_for(model: str) -> int:
+    """Token ceiling for a chat call. Reasoning-heavy models (o-series, gpt-5.x,
+    GLM) consume a large share of the completion on hidden reasoning tokens that
+    count against max_tokens; with the base cap they get truncated mid-reasoning
+    and never emit a visible answer, so they get the larger REASONING_MAX_TOKENS."""
+    if _is_reasoning_model(model) or _is_glm_model(model):
+        return config.REASONING_MAX_TOKENS
+    return config.ANSWER_MAX_TOKENS
+
+
 def _chat_kwargs(model: str | None = None) -> dict:
     """Shared chat-completion kwargs; temperature omitted when unset or when the
     target model rejects it (reasoning / gpt-5.x models)."""
     m = model or config.VISION_MODEL
-    kw: dict = {"model": m, "max_tokens": config.ANSWER_MAX_TOKENS}
+    kw: dict = {"model": m, "max_tokens": _max_tokens_for(m)}
     if config.VISION_TEMPERATURE is not None and not _omits_temperature(m):
         kw["temperature"] = config.VISION_TEMPERATURE
     return kw
@@ -871,20 +881,26 @@ def _answer_stream_openai(question: str, contexts: list[dict], image_paths: list
     pending = False   # last round still wanted tools but we ran out of rounds
     tools_ok = bool(tools)   # some local (Ollama) vision models reject `tools` — drop them on first failure
 
-    def _open_stream(tool_choice: str | None = None, use_tools: bool = True):
+    def _open_stream(tool_choice: str | None = None, use_tools: bool = True,
+                     reasoning_off: bool = False):
         """Start a chat stream, gracefully degrading if the server can't do tools.
         Local vision models often 400 with 'does not support tools'; in that case we
         retry without tools (the calculate/search tools just go unused). Pass
         use_tools=False to omit the tools entirely (the forced final turn) — some
         models (e.g. GLM) emit an inline tool-call as text when tools are present
-        but `tool_choice` forbids them, instead of writing the actual answer."""
+        but `tool_choice` forbids them, instead of writing the actual answer. Pass
+        reasoning_off=True on the forced final turn so a reasoning model spends its
+        whole budget on the visible answer instead of burning it on more hidden
+        reasoning (which is what truncated the answer in the first place)."""
         nonlocal tools_ok
         kw = dict(messages=messages, stream=True,
                   stream_options={"include_usage": True}, **_chat_kwargs(model))
-        if reasoning_model and via_openrouter:
-            # Ask OpenRouter to generate AND include reasoning tokens so we can stream
-            # them as live "thinking" instead of sitting through a silent gap.
-            kw["extra_body"] = {"reasoning": {"enabled": True}}
+        if via_openrouter and (reasoning_model or glm_model):
+            # Over OpenRouter we control reasoning explicitly: normally ask the model
+            # to generate AND return reasoning tokens so we can stream them as live
+            # "thinking"; on the forced final turn, disable reasoning so the budget
+            # goes to the answer prose, not another (possibly truncated) think pass.
+            kw["extra_body"] = {"reasoning": {"enabled": not reasoning_off}}
         if use_tools and tools_ok and tools:
             kw["tools"] = tools
             if tool_choice:
@@ -913,16 +929,21 @@ def _answer_stream_openai(question: str, contexts: list[dict], image_paths: list
         stream = _open_stream()
         round_content: list = []
         tool_calls: dict = {}
+        round_reasoned = False   # this round emitted reasoning tokens
+        finish_reason = None     # "stop" | "length" | "tool_calls" | …
         for chunk in stream:
             _add_usage(usage_tot, getattr(chunk, "usage", None))
             if not chunk.choices:
                 continue
+            if chunk.choices[0].finish_reason:
+                finish_reason = chunk.choices[0].finish_reason
             d = chunk.choices[0].delta
             # Reasoning tokens stream first: wrap them in <thinking>…</thinking> so the
             # UI shows a live, expandable "Thinking" box. They're NOT part of the answer,
             # so they go to the delta stream only — never into content_all.
             r = _reasoning_text(d)
             if r:
+                round_reasoned = True
                 if not think_open:
                     think_open = True
                     yield {"type": "delta", "text": "<thinking>"}
@@ -950,7 +971,19 @@ def _answer_stream_openai(question: str, contexts: list[dict], image_paths: list
             yield {"type": "delta", "text": "</thinking>"}
 
         if not tool_calls:
-            pending = False
+            # No tool call ends the turn — normally a finished answer. But a
+            # reasoning model (GLM) can spend its whole token budget on hidden
+            # reasoning and get cut off (finish_reason == "length") before writing
+            # any visible prose; that empty turn is NOT a finished answer. If
+            # nothing visible has been emitted across the whole stream, force a
+            # clean, reasoning-free continuation below instead of returning "".
+            if "".join(content_all).strip():
+                pending = False
+                break
+            if finish_reason == "length" or round_reasoned:
+                pending = True   # stopped before answering — recover with a final turn
+            else:
+                pending = False
             break
         pending = True
         # Spiral guard: count rounds that called tools but produced no answer prose.
@@ -1010,16 +1043,19 @@ def _answer_stream_openai(question: str, contexts: list[dict], image_paths: list
         if toolonly_rounds >= max_toolonly_rounds:
             break   # runaway tool loop — stop and force the final answer below
 
-    # The model either ran out of the round budget or tripped the spiral guard
-    # without producing a final answer. Force one: drop the tools ENTIRELY (not
-    # just tool_choice="none" — some models, e.g. GLM, then emit a tool call as
-    # inline text instead of prose) and tell it explicitly to write up the result.
+    # The model ended without a usable answer — it ran out of the round budget, it
+    # tripped the spiral guard, or (GLM) it spent the whole token budget on hidden
+    # reasoning and was cut off before writing prose. Force one final turn: drop
+    # the tools ENTIRELY (not just tool_choice="none" — some models, e.g. GLM, then
+    # emit a tool call as inline text instead of prose), disable reasoning so the
+    # full budget goes to the answer rather than another truncated think pass, and
+    # tell it explicitly to write up the result.
     if pending:
         messages.append({"role": "user", "content":
-            "Stop calling tools. Using the values you have already computed above, "
-            "write your complete final answer now in prose. Do NOT call any tool or "
-            "emit any tool-call syntax — just the answer."})
-        stream = _open_stream(use_tools=False)
+            "Stop reasoning and stop calling tools. Using the values you already "
+            "computed above, write your complete final answer now in prose. Do NOT "
+            "call any tool or emit any tool-call syntax — just the answer."})
+        stream = _open_stream(use_tools=False, reasoning_off=True)
         for chunk in stream:
             _add_usage(usage_tot, getattr(chunk, "usage", None))
             if not chunk.choices:

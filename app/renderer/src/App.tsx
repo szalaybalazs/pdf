@@ -5,6 +5,7 @@ import { Chat } from "./components/Chat";
 import { Inspector } from "./components/Inspector";
 import { Settings } from "./components/Settings";
 import { APP_NAME } from "../../src/branding";
+import { IS_MAC } from "./platform";
 
 function HeaderSpinner() {
   return (
@@ -34,7 +35,7 @@ function AppHeader({ environmentOpen, onToggleEnvironment }: { environmentOpen: 
 
   return (
     <header className="app-drag window-header flex h-[46px] shrink-0 items-center border-b border-border">
-      <div className="flex h-full w-[300px] min-w-[300px] items-center border-r border-border bg-surface px-3 pl-[106px]">
+      <div className={`flex h-full w-[300px] min-w-[300px] items-center border-r border-border bg-surface px-3 ${IS_MAC ? "pl-[106px]" : ""}`}>
         <span className="text-[12.5px] font-semibold text-ink">{APP_NAME}</span>
       </div>
       <div className="flex min-w-0 flex-1 items-center px-5">

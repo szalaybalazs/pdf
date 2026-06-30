@@ -7,5 +7,6 @@ Pillow>=10.0.0
 tqdm>=4.66.0
 python-dotenv>=1.0.0
 pytesseract>=0.3.10   # OCR fallback; wraps the Tesseract binary. Packaged builds bundle it (scripts/vendor-tesseract.sh); for dev, brew/apt install tesseract
+sentry-sdk>=2.0.0     # crash/error reporting; opt-in, gated by the desktop app's analytics toggle (env: PDF_QA_SENTRY_DSN)
 sympy>=1.12           # exact arithmetic for the calculate tool
 pint>=0.23            # unit-aware calculations

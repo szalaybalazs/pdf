@@ -2,6 +2,20 @@
  * Renderer entry point. Wires the preload `window.api` event streams into the
  * store, then mounts the React app.
  */
+// Initialise crash reporting first so it can catch errors during the rest of
+// module evaluation and React mount. Config (DSN, release, environment, the
+// opt-out gate) is inherited from the main process over IPC, so the empty
+// options object is intentional — and events travel via the preload bridge,
+// never a direct network call from this CSP-restricted page.
+import * as Sentry from "@sentry/electron/renderer";
+Sentry.init({
+  // Drop console breadcrumbs: this page mirrors backend log lines via
+  // console.log("[backend]", …), which can contain PDF file names. Everything
+  // else (DSN, release, environment, the opt-out gate in the main process'
+  // beforeSend) is inherited over IPC.
+  beforeBreadcrumb: (b) => (b.category === "console" ? null : b),
+});
+
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";

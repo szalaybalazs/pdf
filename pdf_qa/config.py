@@ -67,6 +67,12 @@ VISION_TEMPERATURE = float(_temp) if _temp.strip() != "" else None
 # Cap OpenAI-compatible answer streams so a model that gets stuck reasoning does
 # not run for minutes and consume an enormous completion.
 ANSWER_MAX_TOKENS = int(os.getenv("ANSWER_MAX_TOKENS", "4096"))
+# Reasoning-heavy models (o-series, gpt-5.x, GLM) spend a large, hidden share of
+# the completion on reasoning tokens, which count against max_tokens. With the
+# base 4096 cap, GLM routinely exhausts the budget mid-reasoning and never emits
+# a visible answer, so these models get a larger ceiling that leaves room for the
+# answer after the reasoning.
+REASONING_MAX_TOKENS = int(os.getenv("REASONING_MAX_TOKENS", "8192"))
 
 # Anthropic answerer (Claude). Embeddings always go through OpenAI — Anthropic
 # has no embedding API and the index is built with OpenAI vectors — so only the

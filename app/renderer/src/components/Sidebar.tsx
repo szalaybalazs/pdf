@@ -6,6 +6,7 @@ import {
   installUpdate, showThreadMenu,
 } from "../store";
 import type { Thread } from "../types";
+import { SEP } from "../platform";
 
 function SearchIcon() {
   return (
@@ -285,7 +286,7 @@ export function Sidebar() {
             <li
               key={d}
               className="flex h-[27px] cursor-default items-center gap-1.5 overflow-hidden text-ellipsis whitespace-nowrap rounded-md px-2 text-[12.5px] text-muted transition-colors hover:bg-bg hover:text-ink"
-              title={`${d}\n(double-click to open · right-click for options)`}
+              title={`${d}\n(double-click to open${SEP}right-click for options)`}
               onDoubleClick={() => openDoc(d)}
               onContextMenu={(e) => { e.preventDefault(); showDocMenu(d); }}
             >

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { AssistantMsg, ToolEvent, Segment, Calc } from "../types";
 import { store, activeThread, regenerate, threadOff } from "../store";
 import { api } from "../trpc";
+import { platformText, SEP, LEADING_SEP } from "../platform";
 import {
   renderMarkdown, linkifyCitationsHtml, annotateCalcsHtml, renderMermaidBlocks,
   buildSegments,
@@ -30,7 +31,7 @@ function TraceRow({ ev, pending }: { ev: ToolEvent; pending?: boolean }) {
         {!pending && <span className="dur">  {ev.duration.toFixed(2)}s</span>}
       </div>
       {ev.detail.map((d, i) => <div className="trace-detail" key={"d" + i}>{d}</div>)}
-      {dbg.map((d, i) => <div className="trace-detail debug" key={"g" + i}>· {d}</div>)}
+      {dbg.map((d, i) => <div className="trace-detail debug" key={"g" + i}>{LEADING_SEP}{d}</div>)}
     </>
   );
 }
@@ -192,10 +193,10 @@ export function Assistant({ m }: { m: AssistantMsg }) {
             <div className="usage">
               {m.usage && m.usage.total
                 ? <>{fmtNumber(m.usage.prompt)} in + {fmtNumber(m.usage.completion)} out = {fmtNumber(m.usage.total)} tokens
-                    {m.usage.reasoning ? ` · ${fmtNumber(m.usage.reasoning)} reasoning tokens` : ""} · </>
+                    {m.usage.reasoning ? `${SEP}${fmtNumber(m.usage.reasoning)} reasoning tokens` : ""}{SEP}</>
                 : null}
-              {m.latency ? `${fmtDuration(m.latency)} · ` : ""}{m.model || store.visionModel}
-              {m.sessionId ? ` · sid:${m.sessionId}` : ""}
+              {m.latency ? `${fmtDuration(m.latency)}${SEP}` : ""}{platformText(m.model || store.visionModel)}
+              {m.sessionId ? `${SEP}sid:${m.sessionId}` : ""}
             </div>
           )}
         </>

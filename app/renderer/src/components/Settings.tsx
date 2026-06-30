@@ -190,10 +190,10 @@ export function Settings() {
         <label className="mt-1 flex items-center gap-2 text-[12px] text-ink">
           <input type="checkbox" checked={analyticsEnabled}
             onChange={(e) => setAnalyticsEnabled(e.target.checked)} />
-          Send anonymous usage data
+          Send anonymous usage data, crash reports &amp; logs
         </label>
         <div className="mt-1 text-[11.5px] leading-snug text-faint">
-          Helps improve the app. Counts only — never your documents, file names, questions, answers, or API keys.
+          Helps improve the app: anonymous usage counts, crash reports, and diagnostic logs (which may include PDF file names and technical details). Never your documents&rsquo; contents, your questions, answers, or API keys.
         </div>
 
         <div className="mt-4 text-[12px] text-faint">Keys are stored encrypted on this machine. Data directory:</div>

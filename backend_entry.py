@@ -20,6 +20,11 @@ import sys
 
 
 def main() -> int:
+    # Start crash reporting before anything else so import-time / startup
+    # failures in either sub-command are captured. No-op without a DSN.
+    from pdf_qa.errors import init_error_reporting
+    init_error_reporting()
+
     if len(sys.argv) < 2:
         print("usage: pdf-qa-backend <serve|ingest> [args...]", file=sys.stderr)
         return 2

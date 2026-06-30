@@ -19,7 +19,7 @@ hiddenimports = []
 
 # Packages that ship data files / dynamic submodules PyInstaller's static
 # analysis can miss. collect_all grabs submodules, data and binaries together.
-for pkg in ("fitz", "pymupdf", "openai", "anthropic", "sympy", "pint", "PIL", "tqdm"):
+for pkg in ("fitz", "pymupdf", "openai", "anthropic", "sympy", "pint", "PIL", "tqdm", "sentry_sdk"):
     try:
         d, b, h = collect_all(pkg)
         datas += d

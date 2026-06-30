@@ -2,6 +2,7 @@ import React from "react";
 import { store, activeThread } from "../store";
 import { api } from "../trpc";
 import type { AssistantMsg } from "../types";
+import { SEP } from "../platform";
 
 function XIcon() {
   return (
@@ -82,7 +83,7 @@ export function Inspector({ onClose }: { onClose: () => void }) {
         {sources.length > 0 && (
           <section className="mb-5 border-t border-border pt-4">
             <div className="mb-1.5 text-[14px] text-faint">
-              References · {sources.length}
+              References{SEP}{sources.length}
             </div>
             <ul className="flex flex-col gap-1">
               {sources.map((s, i) => (
@@ -106,7 +107,7 @@ export function Inspector({ onClose }: { onClose: () => void }) {
         {calcs.length > 0 && (
           <section className="border-t border-border pt-4">
             <div className="mb-1.5 text-[14px] text-faint">
-              Verified calculations · {calcs.length}
+              Verified calculations{SEP}{calcs.length}
             </div>
             <ul className="flex flex-col gap-1">
               {calcs.map((c, i) => {
@@ -126,7 +127,7 @@ export function Inspector({ onClose }: { onClose: () => void }) {
               })}
             </ul>
             <div className="mt-2 text-[10.5px] leading-snug text-faint">
-              Green shown in answer · amber computed only · red error
+              Green shown in answer{SEP}amber computed only{SEP}red error
             </div>
           </section>
         )}

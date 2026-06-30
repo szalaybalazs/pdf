@@ -8,6 +8,7 @@
 import { useSyncExternalStore } from "react";
 import { api } from "./trpc";
 import type { UpdateState } from "./trpc";
+import { SEP } from "./platform";
 import type {
   Thread, AssistantMsg, ModelOption, Source, Usage,
   ServeEvent, ReadyEvent, BackendError, ThreadsEvent,
@@ -453,7 +454,7 @@ export function handleServeEvent(ev: ServeEvent): void {
     store.visionModel = r.vision_model;
     if (r.models) applyModels(r.models, r.default_model || "");
     store.statusErr = false;
-    store.status = `${r.chunks} chunks · ${r.docs.length} document(s)`;
+    store.status = `${r.chunks} chunks${SEP}${r.docs.length} document(s)`;
     store.docs = r.docs;
     for (const t of store.threads) {
       t.disabledDocs = (t.disabledDocs || []).filter((d) => r.docs.includes(d));

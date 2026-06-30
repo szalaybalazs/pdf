@@ -15,6 +15,7 @@ import fitz  # PyMuPDF
 from tqdm import tqdm
 
 from . import config, ocr
+from .errors import capture_exception, init_error_reporting
 from .store import Chunk, VectorStore
 
 
@@ -200,6 +201,9 @@ def ingest_paths(paths, embed: bool = True, use_ocr: bool = True,
 
 
 def main(argv=None):
+    # Idempotent; covers the dev path where the app runs `python -m pdf_qa.ingest`.
+    init_error_reporting()
+
     ap = argparse.ArgumentParser(description="Index PDFs for multimodal Q&A.")
     ap.add_argument("--add", nargs="+", metavar="PDF",
                     help="Incrementally add these PDF path(s) to the existing index.")
@@ -221,6 +225,7 @@ def main(argv=None):
                          json_out=args.json, force=args.force)
             return 0
         except Exception as e:  # noqa: BLE001
+            capture_exception(e)
             if args.json:
                 _emit_json({"type": "ingest_error", "message": str(e)})
             else:

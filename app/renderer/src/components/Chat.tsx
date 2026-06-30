@@ -5,6 +5,7 @@ import {
 } from "../store";
 import { Assistant } from "./Assistant";
 import { APP_NAME } from "../../../src/branding";
+import { platformText, SEP } from "../platform";
 
 function Messages() {
   const t = activeThread();
@@ -117,6 +118,7 @@ function Composer() {
   const docCount = threadDocs(t).length;
   const noDocsEnabled = docCount > 0 && enabledDocCount === 0;
   const selectedModel = store.models.find((m) => m.id === store.selectedModel);
+  const selectedModelLabel = selectedModel ? platformText(selectedModel.label) : "";
 
   const autosize = () => {
     const el = ref.current;
@@ -159,7 +161,7 @@ function Composer() {
         </button>
       </div>
 
-      {/* controls under the input: model · debug · session tokens */}
+      {/* controls under the input: model / debug / session tokens */}
       <div className="mt-2 flex w-full max-w-[780px] flex-wrap items-center gap-3">
         <button
           className="max-w-full cursor-pointer truncate px-0 py-1 text-left font-mono text-[12px] text-muted outline-none transition hover:text-ink focus:text-ink disabled:cursor-default disabled:opacity-60"
@@ -167,7 +169,7 @@ function Composer() {
           disabled={!store.models.length}
           onClick={() => { void showModelMenu(); }}
         >
-          {selectedModel?.label || "Model"}
+          {selectedModelLabel || "Model"}
         </button>
         <span className="flex-1" />
         {docCount > 0 && (
@@ -177,7 +179,7 @@ function Composer() {
         )}
         {tok.total > 0 && (
           <span className="ml-auto font-mono text-[11.5px] text-faint" title="Tokens used this session">
-            {tok.total.toLocaleString()} tok ({tok.prompt.toLocaleString()} in / {tok.completion.toLocaleString()} out) · {tok.queries} q
+            {tok.total.toLocaleString()} tok ({tok.prompt.toLocaleString()} in / {tok.completion.toLocaleString()} out){SEP}{tok.queries} q
           </span>
         )}
       </div>

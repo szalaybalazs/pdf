@@ -3,7 +3,7 @@ import {
   store, activeThread, visibleThreads, newThread, selectThread, deleteThread,
   setSearchQuery, addPdfs, openDoc, showDocMenu, openSettings,
   docEnabled, enabledDocs, setAllDocsEnabled, setDocEnabled, threadDocs,
-  installUpdate, showThreadMenu,
+  installUpdate, showThreadMenu, ingestFiles,
 } from "../store";
 import type { Thread } from "../types";
 import { SEP } from "../platform";
@@ -183,6 +183,58 @@ function groupThreadsByDate(threads: Thread[]): ThreadGroup[] {
     .filter((group) => group.threads.length > 0);
 }
 
+/** Ingest progress. When one or more PDFs are being indexed, each gets its own
+ *  row + bar so concurrent ingests are visible; otherwise falls back to the
+ *  single status line (used by remove/temp-doc messages). */
+function IngestProgress() {
+  const files = ingestFiles();
+  if (files.length > 0) {
+    return (
+      <div className="mt-1 max-h-[22vh] space-y-1.5 overflow-y-auto px-2 py-1.5">
+        {files.map((f) => {
+          const isErr = f.phase === "error";
+          const isSkip = f.phase === "skip";
+          const isDone = f.phase === "done";
+          const right = isErr ? "failed" : isSkip ? f.detail
+            : isDone ? "✓" : `${Math.round(f.percent)}%`;
+          return (
+            <div key={f.name} title={`${f.name}${f.detail ? ` — ${f.detail}` : ""}`}>
+              <div className="flex items-center gap-1.5 text-[11px]">
+                <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-muted">
+                  {f.name.replace(/\.pdf$/i, "")}
+                </span>
+                <span className={`shrink-0 font-mono text-[10px] ${isErr ? "text-danger" : isDone ? "text-tint-strong" : "text-faint"}`}>
+                  {right}
+                </span>
+              </div>
+              {!isSkip && (
+                <div className="mt-0.5 h-[3px] overflow-hidden rounded-full bg-surface-3">
+                  <div
+                    className={`h-full rounded-full transition-[width] duration-300 ${isErr ? "bg-danger" : "bg-tint"}`}
+                    style={{ width: `${Math.max(0, Math.min(100, f.percent))}%` }}
+                  />
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+  return (
+    <>
+      {store.ingest.text && (
+        <div className="overflow-hidden text-ellipsis whitespace-nowrap px-2 py-1.5 text-[11.5px] text-tint">{store.ingest.text}</div>
+      )}
+      {store.ingest.percent !== null && (
+        <div className="mx-2 mb-1.5 mt-0.5 h-[4px] overflow-hidden rounded-full bg-surface-3">
+          <div className="h-full rounded-full bg-tint transition-[width] duration-300" style={{ width: `${Math.max(0, Math.min(100, store.ingest.percent))}%` }} />
+        </div>
+      )}
+    </>
+  );
+}
+
 export function Sidebar() {
   const [docsOpen, setDocsOpen] = useState(true);
   const threads = visibleThreads();
@@ -310,14 +362,7 @@ export function Sidebar() {
         </ul>
       )}
 
-      {store.ingest.text && (
-        <div className="overflow-hidden text-ellipsis whitespace-nowrap px-2 py-1.5 text-[11.5px] text-tint">{store.ingest.text}</div>
-      )}
-      {store.ingest.percent !== null && (
-        <div className="mx-2 mb-1.5 mt-0.5 h-[4px] overflow-hidden rounded-full bg-surface-3">
-          <div className="h-full rounded-full bg-tint transition-[width] duration-300" style={{ width: `${Math.max(0, Math.min(100, store.ingest.percent))}%` }} />
-        </div>
-      )}
+      <IngestProgress />
 
       <div className={`mt-1.5 flex items-center gap-2 border-t border-border px-2 pt-2.5 font-mono text-[10.5px] ${store.statusErr ? "text-danger" : "text-faint"}`}>
         {working && <SidebarSpinner />}

@@ -286,6 +286,25 @@ CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "60"))  # words of overlap betwee
 EMBED_BATCH = int(os.getenv("EMBED_BATCH", "128"))   # embeddings per API request
 OCR_LANG = os.getenv("OCR_LANG", "eng")              # Tesseract language(s), e.g. "eng+deu"
 
+# Worker threads for ingestion. Page rendering (PyMuPDF releases the GIL), OCR
+# (a tesseract subprocess) and embedding (network) all run concurrently across
+# these, so a multi-hundred-page book ingests several times faster. Each worker
+# owns its own fitz document handle — handles are never shared across threads.
+# Set INGEST_WORKERS=1 to force the old fully-sequential behaviour.
+def _default_workers() -> int:
+    return max(1, min(8, (os.cpu_count() or 4)))
+
+
+INGEST_WORKERS = max(1, int(os.getenv("INGEST_WORKERS", str(_default_workers()))))
+# How many documents to ingest concurrently when several are added at once. The
+# INGEST_WORKERS page-thread budget is split across the docs in flight, so total
+# threads stay bounded (e.g. 4 docs × 2 page-threads on an 8-worker machine).
+# This is what makes the UI show several documents progressing at the same time.
+INGEST_DOC_WORKERS = max(1, int(os.getenv("INGEST_DOC_WORKERS", str(min(4, INGEST_WORKERS)))))
+# Concurrent embedding requests during ingest. Kept modest by default so a large
+# book doesn't trip provider rate limits; capped by INGEST_WORKERS too.
+EMBED_WORKERS = max(1, int(os.getenv("EMBED_WORKERS", str(min(4, INGEST_WORKERS)))))
+
 # --- Retrieval / answer knobs ------------------------------------------------
 TOP_K = int(os.getenv("TOP_K", "8"))                 # text chunks retrieved
 MAX_IMAGES = int(os.getenv("MAX_IMAGES", "4"))       # distinct page images sent to vision

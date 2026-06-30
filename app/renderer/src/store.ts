@@ -44,7 +44,11 @@ function writeStoredModel(id: string): void {
 const INLINE_TOOLS = new Set(["calculate", "search_documents", "get_pages"]);
 
 // ---- state -----------------------------------------------------------------
-interface IngestState { text: string; percent: number | null }
+export type IngestPhase = "pages" | "embed" | "done" | "error" | "skip";
+// Per-document ingest progress, keyed by filename, so several PDFs ingesting
+// concurrently each get their own row + bar in the sidebar.
+export interface IngestFile { name: string; percent: number; phase: IngestPhase; detail: string }
+interface IngestState { text: string; percent: number | null; files?: Record<string, IngestFile> }
 interface SessionTokens { prompt: number; completion: number; total: number; queries: number }
 
 interface State {
@@ -546,29 +550,70 @@ export function handleServeEvent(ev: ServeEvent): void {
   bump();
 }
 
+// Per-document ingest progress as a list, in first-seen order, for rendering.
+export function ingestFiles(): IngestFile[] {
+  return Object.values(store.ingest.files || {});
+}
+
 export function handleIngestEvent(ev: any): void {
-  const set = (text: string, percent: number | null) => { store.ingest = { text, percent }; };
   const temp = !!ev.temp;
   const scope = temp ? "this chat" : "the index";
+  // Carry the per-file map forward across events; each event upserts one file.
+  const files: Record<string, IngestFile> = { ...(store.ingest.files || {}) };
+  const upsert = (name: string, patch: Partial<IngestFile>) => {
+    const prev: IngestFile = files[name] || { name, percent: 0, phase: "pages", detail: "" };
+    files[name] = { ...prev, ...patch, name };
+  };
+  // Overall bar = mean of the per-file percentages (done counts as 100).
+  const overall = (): number | null => {
+    const vals = Object.values(files);
+    if (!vals.length) return null;
+    const sum = vals.reduce((s, f) => s + (f.phase === "done" ? 100 : f.percent), 0);
+    return Math.round(sum / vals.length);
+  };
+  const setStatus = (text: string, percent: number | null) => { store.ingest = { text, percent, files }; };
+
   switch (ev.type) {
-    case "ingest_start": set(`Ingesting ${ev.total} file(s) for ${scope}…`, null); break;
-    case "file_start": set(`Indexing ${ev.name} (${ev.index}/${ev.total})…`, 0); break;
+    case "ingest_start":
+      store.ingest = { text: `Ingesting ${ev.total} file(s) for ${scope}…`, percent: null, files: {} };
+      break;
+    case "file_start":
+      upsert(ev.name, { percent: 0, phase: "pages", detail: "starting…" });
+      setStatus(`Indexing ${ev.name}…`, overall());
+      break;
     case "file_progress": {
-      const label = ev.phase === "embed"
-        ? `Embedding ${ev.name} (${ev.index}/${ev.total})…`
-        : `Indexing ${ev.name} (${ev.index}/${ev.total}) - page ${ev.page}/${ev.pages}`;
-      set(`${label} ${ev.percent}%`, ev.percent);
+      const embedding = ev.phase === "embed";
+      upsert(ev.name, {
+        percent: ev.percent,
+        phase: embedding ? "embed" : "pages",
+        detail: embedding ? "embedding…" : `page ${ev.page}/${ev.pages}`,
+      });
+      setStatus(`Indexing ${ev.name}… ${ev.percent}%`, overall());
       break;
     }
-    case "file_done": set(`${ev.name}: ${ev.pages}p, ${ev.chunks} chunks`, 100); break;
-    case "file_skip": set(`${ev.name}: ${ev.reason}`, null); break;
-    case "file_error": set(`${ev.name}: ${ev.message}`, null); break;
-    case "ingest_done":
-      set(ev.added ? `Added ${ev.added} document(s).` : "Nothing new to add.", null);
-      if (!temp && Array.isArray(ev.docs)) store.docs = ev.docs;
-      setTimeout(() => { store.ingest = { text: "", percent: null }; bump(); }, 4000);
+    case "file_done":
+      upsert(ev.name, { percent: 100, phase: "done", detail: `${ev.pages}p · ${ev.chunks} chunks` });
+      setStatus(`${ev.name}: ${ev.pages}p, ${ev.chunks} chunks`, overall());
       break;
-    case "ingest_error": set(`${ev.message}`, null); break;
+    case "file_skip":
+      upsert(ev.name, { percent: 0, phase: "skip", detail: ev.reason });
+      setStatus(`${ev.name}: ${ev.reason}`, overall());
+      break;
+    case "file_error":
+      upsert(ev.name, { percent: 100, phase: "error", detail: ev.message });
+      setStatus(`${ev.name}: ${ev.message}`, overall());
+      break;
+    case "ingest_done":
+      store.ingest = {
+        text: ev.added ? `Added ${ev.added} document(s).` : "Nothing new to add.",
+        percent: null, files: {},
+      };
+      if (!temp && Array.isArray(ev.docs)) store.docs = ev.docs;
+      setTimeout(() => { store.ingest = { text: "", percent: null, files: {} }; bump(); }, 4000);
+      break;
+    case "ingest_error":
+      store.ingest = { text: `${ev.message}`, percent: null, files: {} };
+      break;
   }
   bump();
 }

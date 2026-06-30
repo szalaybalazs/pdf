@@ -582,6 +582,8 @@ function installApplicationMenu(): void {
       label: "File",
       submenu: [
         { label: "New Chat", accelerator: "CommandOrControl+N", click: () => dispatchRendererEvent("pdf-qa-new-thread") },
+        { type: "separator" },
+        { label: "Add PDFs to Index…", accelerator: "CommandOrControl+O", click: () => { void addPdfsAction(); } },
         ...(!isMac ? [
           { type: "separator" } as MenuItemConstructorOptions,
           { label: "Check for Updates…", click: () => { void checkForUpdates(true); } } as MenuItemConstructorOptions,
@@ -873,11 +875,31 @@ async function setSettingsAction(s: Settings): Promise<{ ok: boolean }> {
   return { ok: true };
 }
 
+// Guards against two concurrent main-index ingests. Each ingest process does
+// load -> add -> save on the same store, so overlapping runs would clobber each
+// other's additions. The sidebar "+", the File ▸ Add PDFs… menu item, and ⌘O all
+// funnel through here, so the guard lives here. (Per-chat temp ingests write to
+// their own throwaway index dir, so they're unaffected and not guarded.)
+let mainIngestInFlight = false;
+
 // Pick PDFs and ingest them incrementally, streaming progress to the renderer.
+// The dialog allows selecting many files at once ("multiSelections"); every
+// picked file is handed to a single ingest run that processes them concurrently.
 async function addPdfsAction(): Promise<{ canceled: boolean; count?: number }> {
   if (!win) return { canceled: true };
+  if (mainIngestInFlight) {
+    log("info", "add-pdfs ignored: an ingest is already running");
+    await dialog.showMessageBox(win, {
+      type: "info",
+      message: "An ingest is already in progress.",
+      detail: "Wait for the current PDFs to finish indexing before adding more.",
+    });
+    return { canceled: true };
+  }
   const picked = await dialog.showOpenDialog(win, {
     title: "Add PDFs to the index",
+    buttonLabel: "Add to Index",
+    message: "Select one or more PDFs to index (⌘-click or Shift-click for several).",
     properties: ["openFile", "multiSelections"],
     filters: [{ name: "PDF", extensions: ["pdf"] }],
   });
@@ -886,42 +908,47 @@ async function addPdfsAction(): Promise<{ canceled: boolean; count?: number }> {
   log("info", `add-pdfs: ${picked.filePaths.length} file(s)`, preview(picked.filePaths, 400));
   rememberDocPaths(picked.filePaths);   // so we can "open" them later
 
-  await new Promise<void>((resolve) => {
-    const { cmd, args, cwd } = backendCommand("ingest", ["--add", ...picked.filePaths, "--json"]);
-    const proc = spawn(cmd, args, { cwd, env: backendEnv(), windowsHide: true });
-    log("info", `ingest pid=${proc.pid ?? "?"}`);
-    const rl = readline.createInterface({ input: proc.stdout });
-    rl.on("line", (line) => {
-      line = line.trim();
-      if (!line) return;
-      try {
-        const ev = JSON.parse(line);
-        log("info", `ingest event: ${ev?.type ?? "?"}`, preview(ev));
-        if (ev?.type === "ingest_done" && typeof ev.added === "number") {
-          track("pdf_ingested", { added: ev.added });
-          if (ev.added > 0 && firstTime("first_pdf")) track("first_pdf_added", { added: ev.added });
+  mainIngestInFlight = true;
+  try {
+    await new Promise<void>((resolve) => {
+      const { cmd, args, cwd } = backendCommand("ingest", ["--add", ...picked.filePaths, "--json"]);
+      const proc = spawn(cmd, args, { cwd, env: backendEnv(), windowsHide: true });
+      log("info", `ingest pid=${proc.pid ?? "?"}`);
+      const rl = readline.createInterface({ input: proc.stdout });
+      rl.on("line", (line) => {
+        line = line.trim();
+        if (!line) return;
+        try {
+          const ev = JSON.parse(line);
+          log("info", `ingest event: ${ev?.type ?? "?"}`, preview(ev));
+          if (ev?.type === "ingest_done" && typeof ev.added === "number") {
+            track("pdf_ingested", { added: ev.added });
+            if (ev.added > 0 && firstTime("first_pdf")) track("first_pdf_added", { added: ev.added });
+          }
+          trackIngestEvent(ev);
+          emitIngest(ev);
         }
-        trackIngestEvent(ev);
-        emitIngest(ev);
-      }
-      catch { emitLog(line); }
+        catch { emitLog(line); }
+      });
+      let err = "";
+      proc.stderr.on("data", (d: Buffer) => { err = (err + d.toString()).slice(-1500); log("warn", "ingest stderr", preview(d.toString(), 500)); });
+      proc.on("error", (e) => {
+        log("error", "ingest spawn error", e.message);
+        track("ingest_failed", { kind: "spawn_failed" });
+        emitIngest({ type: "ingest_error", message: e.message });
+      });
+      proc.on("close", (code) => {
+        log(code === 0 ? "info" : "warn", `ingest exited (code ${code ?? "?"})`);
+        if (code !== 0)
+          emitIngest({ type: "ingest_error", message: err.trim().split("\n").slice(-2).join(" ") || `exit ${code}` });
+        // tell the live backend to reload the freshly-written index
+        sendToBackend({ type: "reload" });
+        resolve();
+      });
     });
-    let err = "";
-    proc.stderr.on("data", (d: Buffer) => { err = (err + d.toString()).slice(-1500); log("warn", "ingest stderr", preview(d.toString(), 500)); });
-    proc.on("error", (e) => {
-      log("error", "ingest spawn error", e.message);
-      track("ingest_failed", { kind: "spawn_failed" });
-      emitIngest({ type: "ingest_error", message: e.message });
-    });
-    proc.on("close", (code) => {
-      log(code === 0 ? "info" : "warn", `ingest exited (code ${code ?? "?"})`);
-      if (code !== 0)
-        emitIngest({ type: "ingest_error", message: err.trim().split("\n").slice(-2).join(" ") || `exit ${code}` });
-      // tell the live backend to reload the freshly-written index
-      sendToBackend({ type: "reload" });
-      resolve();
-    });
-  });
+  } finally {
+    mainIngestInFlight = false;
+  }
   return { canceled: false, count: picked.filePaths.length };
 }
 

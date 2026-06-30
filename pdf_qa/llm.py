@@ -125,13 +125,32 @@ def _embed_client():
 
 
 def embed_texts(texts: list[str]) -> np.ndarray:
-    """Embed a list of texts, batching to stay within request limits."""
+    """Embed a list of texts, batching to stay within request limits.
+
+    Batches are independent network calls, so when there's more than one and
+    EMBED_WORKERS > 1 they're sent concurrently (the OpenAI/httpx client is
+    safe to share across threads). Results are reassembled in input order, so
+    the returned matrix lines up with `texts` exactly as the serial path did.
+    """
     client, model = _embed_client()
-    out: list[list[float]] = []
-    for i in range(0, len(texts), config.EMBED_BATCH):
-        batch = texts[i : i + config.EMBED_BATCH]
+    batches = [texts[i : i + config.EMBED_BATCH]
+               for i in range(0, len(texts), config.EMBED_BATCH)]
+    if not batches:
+        return np.zeros((0, 0), dtype=np.float32)
+
+    def _run(batch: list[str]) -> list[list[float]]:
         resp = client.embeddings.create(model=model, input=batch)
-        out.extend([d.embedding for d in resp.data])
+        return [d.embedding for d in resp.data]
+
+    workers = min(config.EMBED_WORKERS, len(batches))
+    if workers <= 1 or len(batches) == 1:
+        results = [_run(b) for b in batches]
+    else:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            results = list(ex.map(_run, batches))   # map preserves input order
+
+    out: list[list[float]] = [vec for batch_vecs in results for vec in batch_vecs]
     return np.asarray(out, dtype=np.float32)
 
 

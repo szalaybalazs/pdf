@@ -82,6 +82,7 @@ python -m pdf_qa.ingest
 python -m pdf_qa.ingest --no-embed            # parse + render only, no API key / no cost
 python -m pdf_qa.ingest --files "book.pdf"    # index specific files
 python -m pdf_qa.ingest --no-ocr              # skip OCR fallback
+python -m pdf_qa.ingest --workers 8           # page-processing threads per doc (1 = sequential)
 
 # 2) Ask questions — interactive chat
 python -m pdf_qa.ask                          # chat REPL
@@ -155,6 +156,9 @@ With `--debug` (or after `/debug`) each step expands:
 | `LOCAL_BASE_URL` / `LOCAL_MODEL` | — | OpenAI-compatible local answerer |
 | `ANSWER_MODEL` | `openai` | which model is selected by default |
 | `RENDER_DPI` | `150` | page render resolution |
+| `INGEST_WORKERS` | `min(8, CPUs)` | page-processing threads per document (`1` = sequential) |
+| `INGEST_DOC_WORKERS` | `min(4, INGEST_WORKERS)` | documents ingested concurrently (page budget split across them) |
+| `EMBED_WORKERS` | `min(4, INGEST_WORKERS)` | concurrent embedding requests during ingest |
 | `CHUNK_WORDS` / `CHUNK_OVERLAP` | `320` / `60` | text chunk sizing |
 | `TOP_K` | `8` | text chunks retrieved per question |
 | `MAX_IMAGES` | `4` | distinct page images sent to the vision model |

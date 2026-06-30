@@ -116,15 +116,20 @@ export async function checkForUpdates(manual = false): Promise<void> {
       });
     }
   };
-  const onAvailable = async (info: { version?: string }) => {
+  const onAvailable = async (info: { version?: string; releaseNotes?: string | { version: string; note: string | null }[] | null }) => {
     settle();
     if (manual) {
+      // releaseNotes comes from app/release-notes.md via electron-builder's
+      // releaseInfo block (embedded in latest*.yml). Only the plain-string form
+      // is shown here; the per-version array form isn't used by this app.
+      const notes = typeof info?.releaseNotes === "string" ? info.releaseNotes.trim() : "";
+      const downloading = "The update is downloading in the background. A “Restart to update” option will appear in the sidebar when it is ready.";
       await showUpdateMessage({
         type: "info",
         buttons: ["OK"],
         title: APP_NAME,
         message: `Version ${info?.version ?? ""} is available.`,
-        detail: "The update is downloading in the background. A “Restart to update” option will appear in the sidebar when it is ready.",
+        detail: notes ? `${notes}\n\n${downloading}` : downloading,
       });
     }
   };

@@ -21,6 +21,8 @@ export function Settings() {
   const [openrouter, setOpenrouter] = useState("");
   const [systemPrompt, setSystemPrompt] = useState("");
   const [localModels, setLocalModels] = useState<LocalModelForm[]>([blankLocalModel()]);
+  const [bedrockApiKey, setBedrockApiKey] = useState("");
+  const [bedrockRegion, setBedrockRegion] = useState("");
   const [analyticsEnabled, setAnalyticsEnabled] = useState(true);
   const [dataDir, setDataDir] = useState("");
   const [saving, setSaving] = useState(false);
@@ -41,6 +43,8 @@ export function Settings() {
           ? [{ baseUrl: s.localBaseUrl || "", apiKey: s.localApiKey || "", model: s.localModel || "", textOnly: false }]
           : [blankLocalModel()]);
       setLocalModels(models);
+      setBedrockApiKey(s.bedrockApiKey || "");
+      setBedrockRegion(s.bedrockRegion || "");
       setAnalyticsEnabled(s.analyticsEnabled !== false);
       setDataDir(s.dataDir || "");
     }).catch(() => { /* show empty form */ });
@@ -69,6 +73,7 @@ export function Settings() {
         systemPrompt: systemPrompt.trim(),
         localBaseUrl: firstLocal.baseUrl, localApiKey: firstLocal.apiKey, localModel: firstLocal.model,
         localModels: cleanedLocalModels,
+        bedrockApiKey: bedrockApiKey.trim(), bedrockRegion: bedrockRegion.trim(),
         analyticsEnabled,
       });
       store.statusErr = false;
@@ -158,6 +163,25 @@ export function Settings() {
         >Add local model</button>
         <div className="mt-1.5 text-[11.5px] leading-snug text-faint">
           Most local servers ignore the key. Embeddings still use the OpenAI key.
+        </div>
+
+        <div className="mt-5 mb-1 border-t border-border-strong pt-4 text-[13px] font-semibold tracking-tight text-ink">
+          AWS Bedrock
+        </div>
+        <div className="mb-1 text-[11.5px] leading-snug text-faint">
+          Reach Claude, GLM &amp; GPT-5.5 through Bedrock's OpenAI-compatible gateway with one Bedrock API key.
+          Generate a long-term API key in the Bedrock console. Embeddings still use the OpenAI key.
+        </div>
+
+        <label className={labelCls}>Bedrock API key</label>
+        <input className={inputCls} type="password" autoComplete="off" spellCheck={false}
+          placeholder="bedrock-…" value={bedrockApiKey} onChange={(e) => setBedrockApiKey(e.target.value)} />
+
+        <label className={labelCls}>Region</label>
+        <input className={inputCls} type="text" autoComplete="off" spellCheck={false}
+          placeholder="us-east-1" value={bedrockRegion} onChange={(e) => setBedrockRegion(e.target.value)} />
+        <div className="mt-1 text-[11.5px] leading-snug text-faint">
+          Set a region where your chosen models are enabled (model access granted in the Bedrock console).
         </div>
 
         <div className="mt-5 mb-1 border-t border-border-strong pt-4 text-[13px] font-semibold tracking-tight text-ink">

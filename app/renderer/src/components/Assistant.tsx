@@ -15,6 +15,10 @@ function fmtDuration(seconds: number): string {
   return `${m}m ${String(s).padStart(2, "0")}s`;
 }
 
+function fmtNumber(value?: number): string {
+  return typeof value === "number" ? value.toLocaleString("en-US") : "0";
+}
+
 function TraceRow({ ev, pending }: { ev: ToolEvent; pending?: boolean }) {
   const dbg = store.debug ? ev.debug : [];
   return (
@@ -187,8 +191,8 @@ export function Assistant({ m }: { m: AssistantMsg }) {
           {((m.usage && m.usage.total) || m.latency) && (
             <div className="usage">
               {m.usage && m.usage.total
-                ? <>{m.usage.prompt} in + {m.usage.completion} out = {m.usage.total} tokens
-                    {m.usage.reasoning ? ` · ${m.usage.reasoning} reasoning` : ""} · </>
+                ? <>{fmtNumber(m.usage.prompt)} in + {fmtNumber(m.usage.completion)} out = {fmtNumber(m.usage.total)} tokens
+                    {m.usage.reasoning ? ` · ${fmtNumber(m.usage.reasoning)} reasoning tokens` : ""} · </>
                 : null}
               {m.latency ? `${fmtDuration(m.latency)} · ` : ""}{m.model || store.visionModel}
               {m.sessionId ? ` · sid:${m.sessionId}` : ""}

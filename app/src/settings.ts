@@ -22,6 +22,10 @@ export interface Settings {
   localApiKey: string;
   localModel: string;
   localModels: LocalModelSettings[];
+  // AWS Bedrock via its OpenAI-compatible gateway. The API key (a bearer token)
+  // is encrypted like the others; the region is not a secret (plaintext).
+  bedrockApiKey: string;
+  bedrockRegion: string;
   // Anonymous usage analytics (Aptabase). Opt-out: defaults to true (enabled),
   // but never sends document content, filenames, questions, answers, or keys.
   analyticsEnabled: boolean;
@@ -76,6 +80,8 @@ export function readSettings(): Settings {
       localApiKey: firstLocal.apiKey,
       localModel: firstLocal.model,
       localModels,
+      bedrockApiKey: dec(obj.bedrockApiKey),
+      bedrockRegion: typeof obj.bedrockRegion === "string" ? obj.bedrockRegion : "",
       // default ON; only an explicit `false` opts out
       analyticsEnabled: obj.analyticsEnabled !== false,
     };
@@ -83,6 +89,7 @@ export function readSettings(): Settings {
     return {
       openaiKey: "", anthropicKey: "", openrouterKey: "", systemPrompt: "",
       localBaseUrl: "", localApiKey: "", localModel: "", localModels: [],
+      bedrockApiKey: "", bedrockRegion: "",
       analyticsEnabled: true,
     };
   }
@@ -107,6 +114,8 @@ export function writeSettings(s: Settings): void {
       model: m.model || "",
       textOnly: !!m.textOnly,
     })),
+    bedrockApiKey: encv(s.bedrockApiKey || ""),
+    bedrockRegion: s.bedrockRegion || "",
     analyticsEnabled: s.analyticsEnabled !== false,
   };
   fs.writeFileSync(settingsPath(), JSON.stringify(obj, null, 2), { mode: 0o600 });

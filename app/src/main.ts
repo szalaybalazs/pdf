@@ -261,6 +261,10 @@ function backendEnv(): NodeJS.ProcessEnv {
   if (settings.openaiKey) env.OPENAI_API_KEY = settings.openaiKey;
   if (settings.anthropicKey) env.ANTHROPIC_API_KEY = settings.anthropicKey;
   if (settings.openrouterKey) env.OPENROUTER_API_KEY = settings.openrouterKey;
+  // AWS Bedrock (OpenAI-compatible gateway). The key is a bearer token; region
+  // defaults are handled in the backend. Setting the key enables the provider.
+  if (settings.bedrockApiKey) env.BEDROCK_API_KEY = settings.bedrockApiKey;
+  if (settings.bedrockRegion.trim()) env.BEDROCK_REGION = settings.bedrockRegion.trim();
   if (settings.systemPrompt.trim()) env.PDF_QA_SYSTEM_PROMPT = settings.systemPrompt;
   // Local OpenAI-compatible server (Ollama, LM Studio, …). The backend offers
   // local answerers when a model is set. Blank row URLs fall back to Ollama's
@@ -837,6 +841,8 @@ async function setSettingsAction(s: Settings): Promise<{ ok: boolean }> {
       model: m.model || "",
       textOnly: !!m.textOnly,
     })),
+    bedrockApiKey: s.bedrockApiKey || "",
+    bedrockRegion: s.bedrockRegion || "",
     analyticsEnabled: s.analyticsEnabled !== false,
   });
   setAnalyticsEnabled(s.analyticsEnabled !== false);  // honor opt-in/out without a restart
@@ -846,6 +852,7 @@ async function setSettingsAction(s: Settings): Promise<{ ok: boolean }> {
     has_openai: !!s.openaiKey,
     has_anthropic: !!s.anthropicKey,
     has_openrouter: !!s.openrouterKey,
+    has_bedrock: !!s.bedrockApiKey,
     local_model_count: (s.localModels || []).filter((m) => m.model?.trim()).length,
     has_system_prompt: !!s.systemPrompt?.trim(),
     analytics_enabled: s.analyticsEnabled !== false,

@@ -79,6 +79,14 @@ nsis:
   installerIcon: build/icon.ico
   uninstallerIcon: build/icon.ico
 
+# --- Release notes -----------------------------------------------------------
+# Embedded into the generated latest*.yml so electron-updater can surface them
+# (info.releaseNotes), and reused as the GitHub Release body in CI. Edit
+# app/release-notes.md before each `npm version` + tag. The contents are shown
+# to users verbatim, so keep it user-facing — no HTML comments or commit noise.
+releaseInfo:
+  releaseNotesFile: release-notes.md
+
 # --- Update feed / artifact hosting ------------------------------------------
 # Two providers, by design:
 #   1. generic — what the SHIPPED app reads. Baked into app-update.yml, so the

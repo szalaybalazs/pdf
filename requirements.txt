@@ -1,6 +1,7 @@
 PyMuPDF>=1.24.0
 openai>=1.30.0
 anthropic>=0.40.0     # Claude (Opus) answerer; selectable in the UI alongside OpenAI
+boto3>=1.40.0         # AWS Bedrock Converse (Claude on bedrock-runtime; bearer-token auth via AWS_BEARER_TOKEN_BEDROCK)
 numpy>=1.24.0
 Pillow>=10.0.0
 tqdm>=4.66.0

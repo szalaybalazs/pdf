@@ -15,6 +15,7 @@ export interface AppSettings {
   openaiKey: string; anthropicKey: string; openrouterKey: string; systemPrompt: string;
   localBaseUrl: string; localApiKey: string; localModel: string; dataDir?: string;
   localModels: LocalModelSettings[];
+  bedrockApiKey: string; bedrockRegion: string;
   analyticsEnabled: boolean;
 }
 export interface LocalModelSettings { baseUrl: string; apiKey: string; model: string; textOnly: boolean; }
@@ -37,7 +38,7 @@ export interface RouterDeps {
   markServeSubscribed: () => void;
   sendToBackend: (req: unknown) => void;
   getSettings: () => Promise<AppSettings>;
-  setSettings: (s: { openaiKey: string; anthropicKey: string; openrouterKey: string; systemPrompt: string; localBaseUrl: string; localApiKey: string; localModel: string; localModels: LocalModelSettings[]; analyticsEnabled: boolean }) => Promise<{ ok: boolean }>;
+  setSettings: (s: { openaiKey: string; anthropicKey: string; openrouterKey: string; systemPrompt: string; localBaseUrl: string; localApiKey: string; localModel: string; localModels: LocalModelSettings[]; bedrockApiKey: string; bedrockRegion: string; analyticsEnabled: boolean }) => Promise<{ ok: boolean }>;
   openFigure: (filePath: string) => Promise<string>;
   openDoc: (name: string) => Promise<string>;
   removeDoc: (name: string) => Promise<void>;
@@ -68,6 +69,8 @@ const keys = z.object({
     model: z.string(),
     textOnly: z.boolean().default(false),
   })).default([]),
+  bedrockApiKey: z.string().default(""),
+  bedrockRegion: z.string().default(""),
   analyticsEnabled: z.boolean().default(true),
 });
 

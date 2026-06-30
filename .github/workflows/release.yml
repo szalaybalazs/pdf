@@ -1,20 +1,22 @@
 name: Release
 
 # Builds, signs/notarizes and publishes the desktop app to S3 (served via
-# update.szalay.me) for macOS (arm64) and Windows (x64).
+# update.szalay.me) for macOS (arm64) and Windows (x64). On a tag push it also
+# collects the installers from both runners and attaches them to a GitHub Release.
 #
 # Trigger: push a tag like v0.0.2 *after* bumping app/package.json to the same
 # version (electron-updater compares against package.json's version, not the tag).
 #     cd app && npm version patch && cd .. && git push --follow-tags
 #
-# Or run manually from the Actions tab (workflow_dispatch).
+# Or run manually from the Actions tab (workflow_dispatch). Manual runs still
+# publish to S3 but skip the GitHub Release (there's no tag to attach it to).
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
 
 jobs:
-  release:
+  build:
     strategy:
       fail-fast: false
       matrix:
@@ -90,3 +92,49 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           # Override the default in the script if you change distributions:
           CF_DISTRIBUTION_ID: E6428K3WFUDSE
+
+      # Hand the just-built installers to the github-release job below. Only the
+      # distributables (not the unpacked .app dir electron-builder also leaves in
+      # release/). Tag pushes only — manual dispatch has no tag to release against.
+      - name: Upload installers for the release job
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            app/release/*.dmg
+            app/release/*.zip
+            app/release/*.exe
+            app/release/*.blockmap
+            app/release/latest*.yml
+          if-no-files-found: error
+          retention-days: 1
+
+  # Collect every runner's installers into a single GitHub Release for the tag.
+  # Kept separate from the matrix so the two runners never race to create the
+  # same release. Skipped on manual (workflow_dispatch) runs — no tag to attach.
+  github-release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # required for the GITHUB_TOKEN to create/edit releases
+    steps:
+      - name: Check out repo (for app/release-notes.md)
+        uses: actions/checkout@v4
+
+      - name: Download all installers
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: installers-*
+          merge-multiple: true   # flatten every job's files into artifacts/
+
+      - name: Create / update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: app/release-notes.md   # same notes the in-app updater shows
+          fail_on_unmatched_files: true
+          files: artifacts/**/*

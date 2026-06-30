@@ -1,1 +1,2 @@
+- Native bedrock support
 - Improvements and bug fixes.

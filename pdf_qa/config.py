@@ -59,6 +59,9 @@ OPENAI_GPT41_MODEL = os.getenv("OPENAI_GPT41_MODEL", "gpt-4.1")
 # custom temperature — set VISION_TEMPERATURE= (empty) to omit it for those.
 _temp = os.getenv("VISION_TEMPERATURE", "0.1")
 VISION_TEMPERATURE = float(_temp) if _temp.strip() != "" else None
+# Cap OpenAI-compatible answer streams so a model that gets stuck reasoning does
+# not run for minutes and consume an enormous completion.
+ANSWER_MAX_TOKENS = int(os.getenv("ANSWER_MAX_TOKENS", "4096"))
 
 # Anthropic answerer (Claude). Embeddings always go through OpenAI — Anthropic
 # has no embedding API and the index is built with OpenAI vectors — so only the
@@ -88,6 +91,60 @@ def _bool_env(name: str, default: bool) -> bool:
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 USE_OPENROUTER = _bool_env("USE_OPENROUTER", bool(OPENROUTER_API_KEY))
+
+# --- AWS Bedrock -------------------------------------------------------------
+# Bedrock is reached through its OpenAI-compatible "bedrock-mantle" gateway, NOT
+# boto3/SigV4: one Bedrock API key (a bearer token) used as the OpenAI key, with
+# a region-specific base URL. Most models (Claude, GLM, …) speak the Chat
+# Completions API at .../v1; OpenAI's own models (GPT-5.5) speak ONLY the
+# Responses API at .../openai/v1. Embeddings still use the direct OpenAI key.
+#   key:    Settings field → BEDROCK_API_KEY, else the standard AWS_BEARER_TOKEN_BEDROCK env.
+#   region: BEDROCK_REGION, else AWS_REGION, else us-east-1.
+BEDROCK_API_KEY = os.getenv("BEDROCK_API_KEY") or os.getenv("AWS_BEARER_TOKEN_BEDROCK")
+BEDROCK_REGION = os.getenv("BEDROCK_REGION") or os.getenv("AWS_REGION") or "us-east-1"
+USE_BEDROCK = _bool_env("USE_BEDROCK", bool(BEDROCK_API_KEY))
+
+# Bedrock model IDs are region- and catalog-dependent and change over time, so
+# every one is overridable. Use the bare `anthropic.claude-*` id; if your account
+# requires a cross-region inference profile, set the region prefix (us./eu./
+# apac./jp.) via these env vars.
+BEDROCK_OPUS_MODEL = os.getenv("BEDROCK_OPUS_MODEL", "anthropic.claude-opus-4-8")
+BEDROCK_SONNET_MODEL = os.getenv("BEDROCK_SONNET_MODEL", "anthropic.claude-sonnet-4-6")
+BEDROCK_GLM_MODEL = os.getenv("BEDROCK_GLM_MODEL", "zai.glm-5")
+BEDROCK_DEEPSEEK_MODEL = os.getenv("BEDROCK_DEEPSEEK_MODEL", "deepseek.v3.2")
+
+
+def bedrock_base_url() -> str:
+    """bedrock-mantle OpenAI-compatible Chat Completions endpoint URL."""
+    return f"https://bedrock-mantle.{BEDROCK_REGION}.api.aws/v1"
+
+
+def _bedrock_geo_prefix(region: str) -> str:
+    """Cross-region inference-profile prefix for a region. Many newer models
+    (e.g. Claude) aren't available in-region and must be called via the geo
+    profile (us./eu./jp./au.). Heuristic; override the model id env var if your
+    region maps differently."""
+    r = (region or "").lower()
+    if r.startswith(("us-", "ca-")):
+        return "us."
+    if r.startswith("eu-"):
+        return "eu."
+    if r.startswith("ap-northeast-"):
+        return "jp."
+    if r in ("ap-southeast-2", "ap-southeast-4", "ap-southeast-6"):
+        return "au."
+    return ""   # unknown geo → use the id as-is (or set a global./… id explicitly)
+
+
+def bedrock_model_id(model_id: str) -> str:
+    """Resolve a Converse modelId for the configured region. A bare `anthropic.*`
+    id gets the region's geo prefix applied; ids that already carry a prefix
+    (us./eu./jp./au./apac./global.) or aren't `anthropic.*` pass through."""
+    mid = (model_id or "").strip()
+    if not mid.startswith("anthropic."):
+        return mid
+    prefix = _bedrock_geo_prefix(BEDROCK_REGION)
+    return f"{prefix}{mid}" if prefix else mid
 
 # --- Local models ------------------------------------------------------------
 # Run a locally-installed model CLI as an answerer (no API key — uses your own
@@ -184,6 +241,23 @@ if USE_OPENROUTER:
     # `vision: False` makes the answerer drop page images.
     MODELS["glm"] = {"label": f"Z.ai · {GLM_MODEL} (text only){_via}", "provider": "zai",
                      "model": GLM_MODEL, "openrouter": GLM_MODEL, "vision": False}
+# AWS Bedrock answerers. Only offered when a Bedrock API key is configured. `api`
+# picks the wire protocol: "chat" → OpenAI-compatible Chat Completions on the
+# bedrock-mantle gateway (GLM, DeepSeek); "converse" → boto3 bedrock-runtime
+# Converse (Claude, which isn't on mantle). OpenRouter routing never applies.
+if USE_BEDROCK:
+    # Claude is NOT on the OpenAI-compatible mantle gateway — only bedrock-runtime
+    # (Converse/Invoke) — so it takes the boto3 Converse path.
+    MODELS["bedrock-opus"] = {"label": "Bedrock · Claude Opus", "provider": "bedrock",
+                              "model": BEDROCK_OPUS_MODEL, "openrouter": "", "api": "converse", "vision": True}
+    MODELS["bedrock-sonnet"] = {"label": "Bedrock · Claude Sonnet", "provider": "bedrock",
+                                "model": BEDROCK_SONNET_MODEL, "openrouter": "", "api": "converse", "vision": True}
+    MODELS["bedrock-glm"] = {"label": "Bedrock · GLM 5 (text only)", "provider": "bedrock",
+                             "model": BEDROCK_GLM_MODEL, "openrouter": "", "api": "chat", "vision": False}
+    # DeepSeek V3.2 — Chat Completions on mantle, text-only (no image input).
+    MODELS["bedrock-deepseek"] = {"label": "Bedrock · DeepSeek V3.2 (text only)", "provider": "bedrock",
+                                  "model": BEDROCK_DEEPSEEK_MODEL, "openrouter": "", "api": "chat", "vision": False}
+
 # Which model is selected by default (must be a key of MODELS).
 DEFAULT_MODEL = os.getenv("ANSWER_MODEL", "openai")
 if DEFAULT_MODEL not in MODELS:

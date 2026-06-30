@@ -43,13 +43,47 @@ def _local_client(spec: dict | None = None):
     return OpenAI(api_key=api_key, base_url=base_url)
 
 
+def _bedrock_client():
+    """OpenAI-SDK client pointed at the Bedrock OpenAI-compatible "bedrock-mantle"
+    Chat Completions gateway (GLM, DeepSeek). The Bedrock API key (bearer token)
+    is used as the OpenAI key, with a region-specific base URL."""
+    from openai import OpenAI
+    if not config.BEDROCK_API_KEY:
+        raise RuntimeError(
+            "No Bedrock API key. Add it in Settings (AWS Bedrock) or set "
+            "AWS_BEARER_TOKEN_BEDROCK, or pick a different model in the UI."
+        )
+    return OpenAI(api_key=config.BEDROCK_API_KEY, base_url=config.bedrock_base_url())
+
+
+def _bedrock_runtime_client():
+    """boto3 bedrock-runtime client for the Converse API (Claude, which isn't on
+    the OpenAI-compatible mantle gateway). The Bedrock API key authenticates via
+    the AWS_BEARER_TOKEN_BEDROCK env var; if it's unset, boto3 falls back to the
+    standard AWS credential chain (profile / SigV4)."""
+    import os
+    try:
+        import boto3
+    except ImportError as e:   # pragma: no cover
+        raise RuntimeError(
+            "boto3 is required for Bedrock Claude (Converse). Install it: "
+            "pip install boto3 (it ships in packaged builds)."
+        ) from e
+    if config.BEDROCK_API_KEY:
+        os.environ["AWS_BEARER_TOKEN_BEDROCK"] = config.BEDROCK_API_KEY
+    return boto3.client("bedrock-runtime", region_name=config.BEDROCK_REGION)
+
+
 def _chat_client(spec: dict | None = None):
     """OpenAI-compatible client for chat/vision/title calls. A "local" spec points
-    at LOCAL_BASE_URL; otherwise routes through OpenRouter when enabled, else the
-    direct OpenAI API. (Embeddings always use the direct OpenAI client via
-    _client() — neither OpenRouter nor local servers serve our embedding model.)"""
+    at LOCAL_BASE_URL; a "bedrock" spec at the bedrock-mantle gateway; otherwise
+    routes through OpenRouter when enabled, else the direct OpenAI API. (Embeddings
+    always use the direct OpenAI client via _client() — neither OpenRouter, local
+    servers, nor Bedrock serve our embedding model.)"""
     if spec and spec.get("provider") == "local":
         return _local_client(spec)
+    if spec and spec.get("provider") == "bedrock":
+        return _bedrock_client()
     if spec and spec.get("direct"):
         return _client()   # force direct OpenAI even when OpenRouter is globally on
     if config.USE_OPENROUTER:
@@ -163,9 +197,9 @@ SYSTEM_PROMPT = (
     "• If a parameter the user gave is ambiguous or a question is unclear, ask a "
     "clarifying question instead of guessing what they meant.\n"
     "• Cite sources inline as (filename p.N) for every claim.\n"
-    "CALCULATIONS — THIS IS MANDATORY AND NON-NEGOTIABLE:\n"
-    "• Use the `calculate` tool for EVERY single piece of arithmetic, no matter how "
-    "trivial — additions, subtractions, multiplications, divisions, powers, roots, logs, "
+    "CALCULATIONS:\n"
+    "• Use the `calculate` tool whenever the answer requires arithmetic or a derived "
+    "number — additions, subtractions, multiplications, divisions, powers, roots, logs, "
     "unit conversions, percentages, averages, ratios, interpolation between graph points, "
     "everything. If a number in your answer is the result of ANY computation, it MUST "
     "come from a `calculate` call. NEVER do arithmetic in your head, and never write a "
@@ -173,9 +207,11 @@ SYSTEM_PROMPT = (
     "• Prefer MORE tool calls over fewer: break a multi-step calculation into one "
     "`calculate` call per step rather than computing several operations at once, so each "
     "intermediate value is independently tool-verified. When in doubt, call the tool.\n"
-    "• ALWAYS SHOW every calculation explicitly in your answer: state the formula, "
-    "substitute the actual numbers, and write the exact value the tool returned (with "
-    "units). Never hide a calculation or present only the final number.\n"
+    "• Do NOT show equations, formulas, or symbolic setup unless you actually perform a "
+    "corresponding calculation with `calculate`. When you do calculate, show only the "
+    "formula(s) needed for that calculation, substitute the actual numbers, and write "
+    "the exact value the tool returned (with units). If the answer does not require a "
+    "calculation, answer in prose without equations.\n"
     "• ALWAYS VERIFY every result: confirm the units are right and the magnitude is "
     "sensible, and wherever possible plug the value back into the relation (via another "
     "`calculate` call) to confirm it holds. State the verification explicitly.\n"
@@ -224,18 +260,20 @@ TEXT_SYSTEM_PROMPT = (
     "• If a parameter the user gave is ambiguous or a question is unclear, ask a "
     "clarifying question instead of guessing what they meant.\n"
     "• Cite sources inline as (filename p.N) for every claim.\n"
-    "CALCULATIONS — THIS IS MANDATORY AND NON-NEGOTIABLE:\n"
-    "• Use the `calculate` tool for EVERY single piece of arithmetic, no matter how "
-    "trivial — additions, subtractions, multiplications, divisions, powers, roots, logs, "
+    "CALCULATIONS:\n"
+    "• Use the `calculate` tool whenever the answer requires arithmetic or a derived "
+    "number — additions, subtractions, multiplications, divisions, powers, roots, logs, "
     "unit conversions, percentages, averages, ratios, everything. If a number in your "
     "answer is the result of ANY computation, it MUST come from a `calculate` call. NEVER "
     "do arithmetic in your head, and never write a computed number you did not get from "
     "the tool.\n"
     "• Prefer MORE tool calls over fewer: break a multi-step calculation into one "
     "`calculate` call per step so each intermediate value is independently tool-verified.\n"
-    "• ALWAYS SHOW every calculation explicitly: state the formula, substitute the actual "
-    "numbers, and write the exact value the tool returned (with units). Never hide a "
-    "calculation or present only the final number.\n"
+    "• Do NOT show equations, formulas, or symbolic setup unless you actually perform a "
+    "corresponding calculation with `calculate`. When you do calculate, show only the "
+    "formula(s) needed for that calculation, substitute the actual numbers, and write "
+    "the exact value the tool returned (with units). If the answer does not require a "
+    "calculation, answer in prose without equations.\n"
     "• ALWAYS VERIFY every result: confirm the units are right and the magnitude is "
     "sensible, and wherever possible plug the value back into the relation (via another "
     "`calculate` call) to confirm it holds. State the verification explicitly.\n"
@@ -427,6 +465,14 @@ def _is_reasoning_model(model: str) -> bool:
     return _omits_temperature(model)
 
 
+def _is_glm_model(model: str) -> bool:
+    """GLM tends to obey literal <thinking> prompts too well and can spend the
+    whole response there. Let it answer directly while the UI still supports
+    native reasoning deltas if a provider exposes them."""
+    m = model.lower()
+    return "glm" in m or m.startswith("z-ai/") or ".glm-" in m or "zai.glm" in m
+
+
 def _reasoning_text(delta) -> str:
     """Pull a reasoning-token chunk out of a streamed delta. OpenRouter exposes a
     reasoning model's chain-of-thought as `delta.reasoning` (some providers use
@@ -444,7 +490,7 @@ def _chat_kwargs(model: str | None = None) -> dict:
     """Shared chat-completion kwargs; temperature omitted when unset or when the
     target model rejects it (reasoning / gpt-5.x models)."""
     m = model or config.VISION_MODEL
-    kw: dict = {"model": m}
+    kw: dict = {"model": m, "max_tokens": config.ANSWER_MAX_TOKENS}
     if config.VISION_TEMPERATURE is not None and not _omits_temperature(m):
         kw["temperature"] = config.VISION_TEMPERATURE
     return kw
@@ -575,6 +621,19 @@ _MAX_TOOL_ROUNDS = 100
 # many consecutive tool-only rounds means the model has lost the plot, so we stop
 # offering tools and force it to write the final answer from what it already has.
 _MAX_TOOLONLY_ROUNDS = 24
+_MAX_GLM_TOOLONLY_ROUNDS = 6
+_MAX_DUPLICATE_TOOLONLY_ROUNDS = 3
+_MAX_GLM_DUPLICATE_TOOLONLY_ROUNDS = 1
+
+
+def _tool_signature(name: str, raw_args: str) -> tuple:
+    """Stable signature for spotting repeated tool calls across rounds."""
+    import json
+    try:
+        args = json.loads(raw_args or "{}")
+    except Exception:
+        args = raw_args or ""
+    return (name, json.dumps(args, sort_keys=True) if isinstance(args, dict) else str(args))
 
 
 def _run_calc(tc_name: str, raw_args: str, collected: list) -> str:
@@ -731,6 +790,17 @@ def answer_stream(question: str, contexts: list[dict], image_paths: list[str],
         yield from _answer_stream_openai(question, contexts, image_paths, history,
                                          think, spec["model"], searcher, pager, spec=spec, vision=vision)
         return
+    # AWS Bedrock. Claude isn't on the OpenAI-compatible mantle gateway so it uses
+    # the boto3 Converse path; GLM and DeepSeek speak mantle Chat Completions and
+    # reuse the OpenAI streaming path with their native Bedrock model id.
+    if spec["provider"] == "bedrock":
+        if spec.get("api") == "converse":   # Claude: bedrock-runtime Converse (not on mantle)
+            yield from _answer_stream_bedrock_converse(question, contexts, image_paths, history,
+                                                       think, spec["model"], searcher, pager, vision=vision)
+        else:                                # GLM, DeepSeek: Chat Completions on mantle
+            yield from _answer_stream_openai(question, contexts, image_paths, history,
+                                             think, spec["model"], searcher, pager, spec=spec, vision=vision)
+        return
     # Direct-to-OpenAI override: send the native model id straight to OpenAI,
     # skipping OpenRouter even when it's globally enabled.
     if spec.get("direct"):
@@ -757,12 +827,13 @@ def _answer_stream_openai(question: str, contexts: list[dict], image_paths: list
     # OpenRouter is the active route unless this is the direct-to-OpenAI override or
     # a local server. Only over OpenRouter do we get (and ask for) reasoning deltas.
     via_openrouter = config.USE_OPENROUTER and not (
-        spec and (spec.get("direct") or spec.get("provider") == "local"))
+        spec and (spec.get("direct") or spec.get("provider") in ("local", "bedrock")))
     reasoning_model = _is_reasoning_model(model)
+    glm_model = _is_glm_model(model)
     # Native reasoning models stream their own chain-of-thought; surfacing that live
     # is the "thinking", so don't also force the verbose <thinking> text block (it
     # would gate the visible answer behind a long emitted block).
-    if reasoning_model:
+    if reasoning_model or glm_model:
         think = False
     messages = _build_messages(question, contexts, image_paths, history, think, vision)
     tools = [CALC_TOOL] + ([SEARCH_TOOL] if searcher else []) + ([GET_PAGES_TOOL] if pager else [])
@@ -804,6 +875,12 @@ def _answer_stream_openai(question: str, contexts: list[dict], image_paths: list
 
     think_open = False   # currently streaming reasoning inside an injected <thinking> block
     toolonly_rounds = 0  # consecutive rounds with tool calls but no prose (spiral guard)
+    duplicate_toolonly_rounds = 0
+    seen_tool_sigs: dict[tuple, int] = {}
+    max_toolonly_rounds = _MAX_GLM_TOOLONLY_ROUNDS if glm_model else _MAX_TOOLONLY_ROUNDS
+    max_duplicate_toolonly_rounds = (
+        _MAX_GLM_DUPLICATE_TOOLONLY_ROUNDS if glm_model else _MAX_DUPLICATE_TOOLONLY_ROUNDS
+    )
 
     for _ in range(_MAX_TOOL_ROUNDS):
         stream = _open_stream()
@@ -852,7 +929,21 @@ def _answer_stream_openai(question: str, contexts: list[dict], image_paths: list
         # Spiral guard: count rounds that called tools but produced no answer prose.
         # A healthy answer writes text between calculation batches (resetting this);
         # a runaway loop never does. Trip → break out and force a final answer below.
-        toolonly_rounds = toolonly_rounds + 1 if not "".join(round_content).strip() else 0
+        has_prose = bool("".join(round_content).strip())
+        round_sigs = [
+            _tool_signature(tool_calls[i]["name"], tool_calls[i]["args"] or "{}")
+            for i in sorted(tool_calls)
+        ]
+        repeated_round = bool(round_sigs) and all(seen_tool_sigs.get(sig, 0) > 0 for sig in round_sigs)
+        toolonly_rounds = toolonly_rounds + 1 if not has_prose else 0
+        duplicate_toolonly_rounds = (
+            duplicate_toolonly_rounds + 1 if repeated_round and not has_prose else 0
+        )
+        if (toolonly_rounds >= max_toolonly_rounds
+                or duplicate_toolonly_rounds >= max_duplicate_toolonly_rounds):
+            break
+        for sig in round_sigs:
+            seen_tool_sigs[sig] = seen_tool_sigs.get(sig, 0) + 1
         # record the assistant turn that requested the tools, then run them
         messages.append({"role": "assistant", "content": "".join(round_content) or None,
                          "tool_calls": [{"id": tool_calls[i]["id"] or f"call_{i}", "type": "function",
@@ -889,7 +980,7 @@ def _answer_stream_openai(question: str, contexts: list[dict], image_paths: list
                 content.append({"type": "image_url",
                                 "image_url": {"url": _image_data_url(p, config.VISION_MAX_DIM)}})
             messages.append({"role": "user", "content": content})
-        if toolonly_rounds >= _MAX_TOOLONLY_ROUNDS:
+        if toolonly_rounds >= max_toolonly_rounds:
             break   # runaway tool loop — stop and force the final answer below
 
     # The model either ran out of the round budget or tripped the spiral guard
@@ -1117,6 +1208,174 @@ def _answer_stream_anthropic(question: str, contexts: list[dict], image_paths: l
             usage_tot["prompt"] += getattr(u, "input_tokens", 0) or 0
             usage_tot["completion"] += getattr(u, "output_tokens", 0) or 0
             usage_tot["total"] = usage_tot["prompt"] + usage_tot["completion"]
+
+    yield {"type": "final", "text": "".join(content_all), "latency": time.time() - t0,
+           "n_images": len(image_paths), "usage": usage_tot, "calculations": calculations}
+
+
+# ---- Bedrock Converse path (Claude on bedrock-runtime) ----------------------
+# Claude is NOT on the OpenAI-compatible mantle gateway, so it uses boto3's
+# Converse API. Same tool loop as the other paths, in Converse's wire format
+# (content blocks, toolUse/toolResult, converse_stream events). Page images ride
+# in the user turn and in tool results (Converse allows image blocks in both).
+# NOTE: not exercised against a live account here — verify when you first run it.
+
+def _converse_tool(t: dict) -> dict:
+    """Convert a Chat-Completions tool spec to a Converse toolSpec."""
+    f = t["function"]
+    return {"toolSpec": {"name": f["name"], "description": f["description"],
+                         "inputSchema": {"json": f["parameters"]}}}
+
+
+def _converse_image_block(path: str) -> dict:
+    return {"image": {"format": "jpeg",
+                      "source": {"bytes": base64.b64decode(_image_jpeg_b64(path, config.VISION_MAX_DIM))}}}
+
+
+def _build_converse_user_content(question, contexts, image_paths, history, vision) -> list:
+    if not vision:
+        image_paths = []
+    text_block = "\n\n".join(
+        f"[Passage {i+1}] ({c['doc']} p.{c['page']})\n{c['text']}"
+        for i, c in enumerate(contexts)
+    )
+    blocks: list = [{"text": f"Question: {question}\n\nRetrieved passages:\n{text_block}\n\n"
+                             f"{_followup_note(history, bool(image_paths))}"}]
+    for p in image_paths:
+        blocks.append(_converse_image_block(p))
+    return blocks
+
+
+def _answer_stream_bedrock_converse(question: str, contexts: list[dict], image_paths: list[str],
+                                    history: list[dict] | None, think: bool, model: str,
+                                    searcher=None, pager=None, vision: bool = True):
+    import json
+    import time
+    if not vision:
+        image_paths = []
+    client = _bedrock_runtime_client()
+    model_id = config.bedrock_model_id(model)
+    system = [{"text": _system_prompt(think, vision)}]
+    tool_config = {"tools": [_converse_tool(CALC_TOOL)]
+                   + ([_converse_tool(SEARCH_TOOL)] if searcher else [])
+                   + ([_converse_tool(GET_PAGES_TOOL)] if pager else [])}
+    inference: dict = {"maxTokens": config.ANTHROPIC_MAX_TOKENS}
+    if config.VISION_TEMPERATURE is not None:
+        inference["temperature"] = config.VISION_TEMPERATURE
+
+    messages: list = []
+    for h in (history or []):
+        messages.append({"role": h["role"], "content": [{"text": h["content"]}]})
+    messages.append({"role": "user",
+                     "content": _build_converse_user_content(question, contexts, image_paths, history, vision)})
+
+    t0 = time.time()
+    content_all: list = []
+    calculations: list = []
+    usage_tot = _new_usage()
+    pending = False
+
+    def _accumulate_usage(usage):
+        if not usage:
+            return
+        usage_tot["prompt"] += usage.get("inputTokens", 0) or 0
+        usage_tot["completion"] += usage.get("outputTokens", 0) or 0
+        usage_tot["total"] = usage_tot["prompt"] + usage_tot["completion"]
+
+    def _tool_result_blocks(out: dict, imgs: list) -> list:
+        blocks: list = [{"text": out["text"]}]
+        for p in (imgs if vision else []):
+            blocks.append(_converse_image_block(p))
+        return blocks
+
+    for _ in range(_MAX_TOOL_ROUNDS):
+        resp = client.converse_stream(modelId=model_id, system=system, messages=messages,
+                                      toolConfig=tool_config, inferenceConfig=inference)
+        text_parts: list = []
+        tool_uses: dict = {}     # contentBlockIndex -> {toolUseId, name, input_str}
+        stop_reason = None
+        for event in resp["stream"]:
+            if "contentBlockStart" in event:
+                cbs = event["contentBlockStart"]
+                start = cbs.get("start", {})
+                if "toolUse" in start:
+                    tu = start["toolUse"]
+                    tool_uses[cbs["contentBlockIndex"]] = {"toolUseId": tu["toolUseId"],
+                                                           "name": tu["name"], "input_str": ""}
+            elif "contentBlockDelta" in event:
+                cbd = event["contentBlockDelta"]
+                delta = cbd.get("delta", {})
+                if "text" in delta:
+                    txt = delta["text"]
+                    text_parts.append(txt)
+                    content_all.append(txt)
+                    yield {"type": "delta", "text": txt}
+                elif "toolUse" in delta and cbd["contentBlockIndex"] in tool_uses:
+                    tool_uses[cbd["contentBlockIndex"]]["input_str"] += delta["toolUse"].get("input", "")
+            elif "messageStop" in event:
+                stop_reason = event["messageStop"].get("stopReason")
+            elif "metadata" in event:
+                _accumulate_usage(event["metadata"].get("usage"))
+
+        if not tool_uses or stop_reason != "tool_use":
+            pending = False
+            break
+        pending = True
+
+        # Echo the assistant turn (text + toolUse blocks), then answer the tools.
+        assistant_blocks: list = []
+        if "".join(text_parts).strip():
+            assistant_blocks.append({"text": "".join(text_parts)})
+        parsed: list = []
+        for idx in sorted(tool_uses):
+            tu = tool_uses[idx]
+            try:
+                args_obj = json.loads(tu["input_str"] or "{}")
+            except Exception:
+                args_obj = {}
+            assistant_blocks.append({"toolUse": {"toolUseId": tu["toolUseId"],
+                                                 "name": tu["name"], "input": args_obj}})
+            parsed.append((tu, args_obj))
+        messages.append({"role": "assistant", "content": assistant_blocks})
+
+        tool_results: list = []
+        for tu, args_obj in parsed:
+            name, tuid, args_json = tu["name"], tu["toolUseId"], json.dumps(args_obj)
+            if name == "search_documents" and searcher:
+                out, imgs = _run_search(args_json, searcher)
+                yield {"type": "tool_call", "name": "search_documents", "args": _search_query(args_json),
+                       "ok": True, "result": f"{out['n']} passage(s), {len(imgs)} new page(s)"}
+                tool_results.append({"toolResult": {"toolUseId": tuid, "content": _tool_result_blocks(out, imgs)}})
+            elif name == "get_pages" and pager:
+                out, imgs = _run_get_pages(args_json, pager)
+                yield {"type": "tool_call", "name": "get_pages", "args": _pages_summary(args_json),
+                       "ok": True, "result": f"{out['n']} page(s), {len(imgs)} image(s)"}
+                tool_results.append({"toolResult": {"toolUseId": tuid, "content": _tool_result_blocks(out, imgs)}})
+            else:
+                res = _run_calc(name, args_json, calculations)
+                if name == "calculate" and calculations:
+                    last = calculations[-1]
+                    yield {"type": "tool_call", "name": "calculate", "args": last["expression"],
+                           "ok": last["ok"], "result": last["result"] or last["error"]}
+                tool_results.append({"toolResult": {"toolUseId": tuid, "content": [{"text": res}]}})
+        messages.append({"role": "user", "content": tool_results})
+
+    # Ran out of rounds still wanting tools — force a final, tool-free answer.
+    if pending:
+        messages.append({"role": "user", "content": [{"text":
+            "Stop calling tools. Using the values you already have, write your complete "
+            "final answer now in prose. Do NOT call any tool."}]})
+        resp = client.converse_stream(modelId=model_id, system=system, messages=messages,
+                                      inferenceConfig=inference)
+        for event in resp["stream"]:
+            if "contentBlockDelta" in event:
+                delta = event["contentBlockDelta"].get("delta", {})
+                if "text" in delta:
+                    txt = delta["text"]
+                    content_all.append(txt)
+                    yield {"type": "delta", "text": txt}
+            elif "metadata" in event:
+                _accumulate_usage(event["metadata"].get("usage"))
 
     yield {"type": "final", "text": "".join(content_all), "latency": time.time() - t0,
            "n_images": len(image_paths), "usage": usage_tot, "calculations": calculations}

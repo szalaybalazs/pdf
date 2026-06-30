@@ -305,6 +305,12 @@ def handle_query(store: VectorStore | None, req: dict) -> None:
          [f"{final['n_images']} image(s) sent"], dbg, t0)
 
     thinking, ans = split_thinking(final["text"])
+    if not ans.strip() and thinking.strip():
+        ans = (
+            "The selected model produced only hidden thinking and did not write a "
+            "final answer. Try sending the question again; GLM is now prompted to "
+            "answer directly instead of using hidden <thinking> blocks."
+        )
     # Some models emit tool calls inline as text (<tool_call>{...}</tool_call>)
     # instead of via the API. Strip those from the answer and execute any
     # calculate payloads so they still show up in the verified-calc panel.

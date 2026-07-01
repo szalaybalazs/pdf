@@ -15,6 +15,16 @@ from typing import Iterable
 import numpy as np
 
 
+def _l2_normalize(mat: np.ndarray) -> np.ndarray:
+    """L2-normalize each row in place. Zero rows (e.g. dry-run placeholders) are
+    left untouched. Vectors are stored unit-length so search() is a bare matmul
+    with no per-query copy of the whole matrix."""
+    norms = np.linalg.norm(mat, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    mat /= norms
+    return mat
+
+
 @dataclass
 class Chunk:
     id: str            # e.g. "Book.pdf:p012:c0"
@@ -33,7 +43,9 @@ class VectorStore:
 
     # --- build -------------------------------------------------------------
     def add(self, chunks: list[Chunk], vectors: np.ndarray) -> None:
-        vectors = np.asarray(vectors, dtype=np.float32)
+        # np.array (not asarray) so we own the buffer and can normalize in place
+        # without mutating the caller's array.
+        vectors = _l2_normalize(np.array(vectors, dtype=np.float32))
         if self.vectors is None:
             self.vectors = vectors
         else:
@@ -78,7 +90,9 @@ class VectorStore:
             # and search() take their None-handling paths.
             store.vectors = None
         else:
-            store.vectors = np.asarray(vectors, dtype=np.float32)
+            # Normalize on load so legacy stores written before pre-normalization
+            # still search correctly; re-normalizing unit vectors is a no-op.
+            store.vectors = _l2_normalize(np.array(vectors, dtype=np.float32))
         store.chunks = []
         with open(prefix.with_suffix(".jsonl"), encoding="utf-8") as f:
             for line in f:
@@ -87,6 +101,8 @@ class VectorStore:
 
     def search(self, query_vec: np.ndarray, top_k: int,
                docs: Iterable[str] | None = None) -> list[tuple[Chunk, float]]:
+        if self.vectors is None or not self.chunks:
+            return []
         q = np.asarray(query_vec, dtype=np.float32)
         q /= (np.linalg.norm(q) + 1e-9)
         mat = self.vectors
@@ -99,8 +115,9 @@ class VectorStore:
             chunks = [self.chunks[i] for i in idxs]
         else:
             chunks = self.chunks
-        mat_norm = mat / (np.linalg.norm(mat, axis=1, keepdims=True) + 1e-9)
-        scores = mat_norm @ q
+        # Stored vectors are already unit-length, so cosine similarity is a bare
+        # matmul — no per-query normalized copy of the whole matrix.
+        scores = mat @ q
         idx = np.argsort(-scores)[:top_k]
         return [(chunks[i], float(scores[i])) for i in idx]
 

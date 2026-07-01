@@ -8,6 +8,7 @@ Run:
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -37,18 +38,51 @@ def looks_like_text(s: str) -> bool:
     return letters / len(s) > 0.30
 
 
+_SENT_SPLIT = re.compile(r'(?<=[.!?])\s+(?=[A-Z0-9"\'(])')
+
+
+def _sentences(text: str) -> list[str]:
+    """Lightweight sentence segmentation: split on sentence-final punctuation
+    followed by whitespace and an opening/capital token. Good enough for prose
+    and avoids an NLTK dependency; garbage with no punctuation stays one blob
+    (and gets dropped downstream by looks_like_text)."""
+    return [p.strip() for p in _SENT_SPLIT.split(text.strip()) if p.strip()]
+
+
 def chunk_page_text(text: str, words: int, overlap: int) -> list[str]:
-    """Split a page's text into overlapping ~`words`-sized chunks (garbage dropped)."""
-    toks = text.split()
-    if not toks:
+    """Pack whole sentences into ~`words`-sized chunks, carrying ~`overlap` words
+    of trailing sentences into the next chunk so context isn't split mid-sentence.
+    Garbage (non-text) chunks are dropped."""
+    sents = _sentences(text)
+    if not sents:
         return []
-    chunks, start = [], 0
-    step = max(1, words - overlap)
-    while start < len(toks):
-        chunk = " ".join(toks[start : start + words])
+    chunks: list[str] = []
+    cur: list[str] = []
+    cur_words = 0
+    for sent in sents:
+        wc = len(sent.split())
+        # Flush before overflowing the target — but a lone oversized sentence is
+        # still emitted rather than dropped.
+        if cur and cur_words + wc > words:
+            chunk = " ".join(cur)
+            if looks_like_text(chunk):
+                chunks.append(chunk)
+            # Seed the next chunk with a tail of sentences worth ~overlap words.
+            tail: list[str] = []
+            tail_words = 0
+            for s in reversed(cur):
+                sw = len(s.split())
+                if tail and tail_words + sw > overlap:
+                    break
+                tail.insert(0, s)
+                tail_words += sw
+            cur, cur_words = tail, tail_words
+        cur.append(sent)
+        cur_words += wc
+    if cur:
+        chunk = " ".join(cur)
         if looks_like_text(chunk):
             chunks.append(chunk)
-        start += step
     return chunks
 
 

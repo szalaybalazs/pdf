@@ -215,6 +215,9 @@ function IngestProgress() {
                   />
                 </div>
               )}
+              {f.eta && !isErr && !isDone && (
+                <div className="mt-0.5 text-right font-mono text-[9.5px] text-faint">{f.eta}</div>
+              )}
             </div>
           );
         })}

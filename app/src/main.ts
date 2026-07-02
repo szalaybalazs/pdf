@@ -529,6 +529,9 @@ function createWindow(): void {
     minHeight: 600,
     title: APP_NAME,
     icon: windowIcon,
+    // Don't show the window until the renderer has painted its first frame, so
+    // the user never sees an empty white/vibrancy shell while JS boots.
+    show: false,
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 13, y: 13 },
     vibrancy: process.platform === "darwin" ? "under-window" : undefined,
@@ -546,6 +549,7 @@ function createWindow(): void {
   // Attach the tRPC IPC handler to this window's webContents.
   createIPCHandler({ router: appRouter, windows: [win] });
   win.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
+  win.once("ready-to-show", () => win?.show());
   win.webContents.on("did-finish-load", () => log("info", "renderer loaded"));
 }
 

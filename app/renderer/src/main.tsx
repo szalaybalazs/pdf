@@ -22,9 +22,8 @@ import { App } from "./App";
 import { handleServeEvent, handleIngestEvent, handleUpdateEvent } from "./store";
 import { api } from "./trpc";
 
-// mermaid is loaded as a global <script> in index.html (offline vendor bundle)
-const mermaid = (window as any).mermaid;
-if (mermaid) mermaid.initialize({ startOnLoad: false, theme: "neutral", securityLevel: "strict" });
+// mermaid (~3 MB) is loaded lazily the first time a diagram needs rendering
+// (see markdown.ts) so it doesn't delay startup / first paint.
 
 // subscribe to backend streams
 api.onServeEvent(handleServeEvent);

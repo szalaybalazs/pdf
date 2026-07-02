@@ -47,7 +47,7 @@ const INLINE_TOOLS = new Set(["calculate", "search_documents", "get_pages"]);
 export type IngestPhase = "pages" | "embed" | "done" | "error" | "skip";
 // Per-document ingest progress, keyed by filename, so several PDFs ingesting
 // concurrently each get their own row + bar in the sidebar.
-export interface IngestFile { name: string; percent: number; phase: IngestPhase; detail: string }
+export interface IngestFile { name: string; percent: number; phase: IngestPhase; detail: string; eta?: string | null }
 interface IngestState { text: string; percent: number | null; files?: Record<string, IngestFile> }
 interface SessionTokens { prompt: number; completion: number; total: number; queries: number }
 
@@ -555,6 +555,68 @@ export function ingestFiles(): IngestFile[] {
   return Object.values(store.ingest.files || {});
 }
 
+// ETA is derived on the app side (the CLI's tqdm bars aren't visible here).
+// We work in *pages*, not the overall percentage: percent lurches every time a
+// file completes, but page throughput (pages/sec) is smooth and is exactly what
+// tqdm reports. The files ingest concurrently, so the batch finishes when the
+// SLOWEST file finishes — the ETA is the max of the per-file ETAs, each from
+// that file's own throughput over a trailing window.
+const ETA_WINDOW_MS = 20_000;
+// Per-file page counts for the current run: {done, total}, plus a trailing
+// window of (time, done) samples to measure that file's own pages/sec.
+interface PageStat { done: number; total: number; samples: { t: number; done: number }[] }
+let pageStats: Record<string, PageStat> = {};
+// Total files in the current run and how many were skipped, so the overall bar
+// averages over what will actually be processed.
+let ingestTotal = 0;
+let skipCount = 0;
+
+function resetEta(): void { pageStats = {}; }
+
+function formatEta(secs: number): string {
+  if (!isFinite(secs) || secs < 0) return "";
+  const s = Math.round(secs);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  if (m < 60) return r ? `${m}m ${r}s` : `${m}m`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
+}
+
+// A single file's ETA from its own throughput: rate = Δ(its pages) / Δtime over
+// the trailing window, ETA = remaining / rate. Null until the rate is stable.
+function fileEta(name: string): string | null {
+  const p = pageStats[name];
+  if (!p) return null;
+  const remaining = p.total - p.done;
+  if (remaining <= 0) return null;                   // this file is done
+  const first = p.samples[0];
+  if (!first) return null;
+  const now = Date.now();
+  const dDone = p.done - first.done;
+  const dT = (now - first.t) / 1000;
+  if (dT < 2 || dDone <= 0) return null;             // not enough throughput yet
+  const rate = dDone / dT;                           // pages per second
+  const left = formatEta(remaining / rate);
+  if (!left) return null;
+  const rateStr = rate >= 10 ? Math.round(rate).toString() : rate.toFixed(1);
+  return `${rateStr} p/s · about ${left} left`;
+}
+
+
+// Record page progress for a file so computeEta() can measure its throughput.
+function trackPages(name: string, done: number, total: number): void {
+  if (!(total > 0)) return;
+  const d = Math.min(done, total);
+  const p = pageStats[name] || (pageStats[name] = { done: 0, total, samples: [] });
+  p.done = d;
+  p.total = total;
+  const now = Date.now();
+  p.samples.push({ t: now, done: d });
+  while (p.samples.length > 1 && now - p.samples[0].t > ETA_WINDOW_MS) p.samples.shift();
+}
+
 export function handleIngestEvent(ev: any): void {
   const temp = !!ev.temp;
   const scope = temp ? "this chat" : "the index";
@@ -564,17 +626,26 @@ export function handleIngestEvent(ev: any): void {
     const prev: IngestFile = files[name] || { name, percent: 0, phase: "pages", detail: "" };
     files[name] = { ...prev, ...patch, name };
   };
-  // Overall bar = mean of the per-file percentages (done counts as 100).
+  // Overall bar = mean of the per-file percentages (done counts as 100),
+  // averaged over the run's full file count — not just the files seen so far,
+  // or the bar would spike then plunge as later files start (skips excluded,
+  // since they're never processed).
   const overall = (): number | null => {
-    const vals = Object.values(files);
+    const vals = Object.values(files).filter((f) => f.phase !== "skip");
     if (!vals.length) return null;
     const sum = vals.reduce((s, f) => s + (f.phase === "done" ? 100 : f.percent), 0);
-    return Math.round(sum / vals.length);
+    const denom = Math.max(vals.length, ingestTotal - skipCount);
+    return Math.round(sum / Math.max(1, denom));
   };
-  const setStatus = (text: string, percent: number | null) => { store.ingest = { text, percent, files }; };
+  const setStatus = (text: string, percent: number | null) => {
+    store.ingest = { text, percent, files };
+  };
 
   switch (ev.type) {
     case "ingest_start":
+      ingestTotal = typeof ev.total === "number" ? ev.total : 0;
+      skipCount = 0;
+      resetEta();
       store.ingest = { text: `Ingesting ${ev.total} file(s) for ${scope}…`, percent: null, files: {} };
       break;
     case "file_start":
@@ -583,19 +654,26 @@ export function handleIngestEvent(ev: any): void {
       break;
     case "file_progress": {
       const embedding = ev.phase === "embed";
+      // The embed event carries dummy page counts (0/1); treat embedding as
+      // "all pages processed" for throughput and leave the real total in place.
+      if (embedding) { const p = pageStats[ev.name]; if (p) p.done = p.total; }
+      else trackPages(ev.name, ev.page, ev.pages);
       upsert(ev.name, {
         percent: ev.percent,
         phase: embedding ? "embed" : "pages",
         detail: embedding ? "embedding…" : `page ${ev.page}/${ev.pages}`,
+        eta: embedding ? null : fileEta(ev.name),
       });
       setStatus(`Indexing ${ev.name}… ${ev.percent}%`, overall());
       break;
     }
     case "file_done":
+      if (typeof ev.pages === "number") trackPages(ev.name, ev.pages, ev.pages);
       upsert(ev.name, { percent: 100, phase: "done", detail: `${ev.pages}p · ${ev.chunks} chunks` });
       setStatus(`${ev.name}: ${ev.pages}p, ${ev.chunks} chunks`, overall());
       break;
     case "file_skip":
+      skipCount += 1;
       upsert(ev.name, { percent: 0, phase: "skip", detail: ev.reason });
       setStatus(`${ev.name}: ${ev.reason}`, overall());
       break;
@@ -604,6 +682,7 @@ export function handleIngestEvent(ev: any): void {
       setStatus(`${ev.name}: ${ev.message}`, overall());
       break;
     case "ingest_done":
+      resetEta();
       store.ingest = {
         text: ev.added ? `Added ${ev.added} document(s).` : "Nothing new to add.",
         percent: null, files: {},
@@ -612,6 +691,7 @@ export function handleIngestEvent(ev: any): void {
       setTimeout(() => { store.ingest = { text: "", percent: null, files: {} }; bump(); }, 4000);
       break;
     case "ingest_error":
+      resetEta();
       store.ingest = { text: `${ev.message}`, percent: null, files: {} };
       break;
   }

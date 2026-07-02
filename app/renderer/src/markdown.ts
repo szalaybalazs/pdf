@@ -128,11 +128,34 @@ export function renderMarkdown(src: string, allowMermaid = false): string {
   return html;
 }
 
+// mermaid is a ~3 MB dependency that's only needed when an answer actually
+// contains a diagram. Loading it up front adds seconds to startup (download +
+// parse before the first paint), so we inject its vendor bundle lazily the
+// first time a mermaid block needs rendering, caching the load promise.
+let mermaidLoad: Promise<any> | null = null;
+function loadMermaid(): Promise<any> {
+  if (mermaidLoad) return mermaidLoad;
+  mermaidLoad = new Promise<any>((resolve, reject) => {
+    if ((window as any).mermaid) return resolve((window as any).mermaid);
+    const s = document.createElement("script");
+    s.src = "./vendor/mermaid.min.js";
+    s.onload = () => {
+      const mermaid = (window as any).mermaid;
+      if (mermaid) mermaid.initialize({ startOnLoad: false, theme: "neutral", securityLevel: "strict" });
+      resolve(mermaid);
+    };
+    s.onerror = () => reject(new Error("failed to load mermaid"));
+    document.head.appendChild(s);
+  }).catch(() => null);
+  return mermaidLoad;
+}
+
 /** After messages are in the DOM, turn pending mermaid blocks into rendered SVG. */
 let mermaidSeq = 0;
 export async function renderMermaidBlocks(root: HTMLElement): Promise<void> {
-  const mermaid = (window as any).mermaid;
   const nodes = Array.from(root.querySelectorAll(".mermaid-pending")) as HTMLElement[];
+  if (nodes.length === 0) return;
+  const mermaid = await loadMermaid();
   for (const node of nodes) {
     const code = node.getAttribute("data-code") || "";
     node.removeAttribute("data-code");

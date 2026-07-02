@@ -70,6 +70,14 @@ win:
       arch: [x64]
   # Signing: set WIN_CSC_LINK (path/base64 of the .pfx) + WIN_CSC_KEY_PASSWORD,
   # or configure an Azure Trusted Signing / EV token per electron-builder docs.
+  #
+  # TEMPORARY (self-signed cert): electron-updater otherwise refuses a downloaded
+  # Windows update whose Authenticode signature isn't trusted — which a self-signed
+  # cert never is — so auto-update fails. Disabling the publisher-signature check
+  # lets the self-signed build update (integrity is still enforced by the sha512 in
+  # latest.yml). REMOVE this line once a real OV/EV cert (Azure Trusted Signing) is
+  # in place, so tamper verification is restored.
+  verifyUpdateCodeSignature: false
 
 nsis:
   oneClick: false

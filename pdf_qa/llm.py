@@ -198,6 +198,89 @@ def summarize_title(question: str, answer: str) -> str:
         return ""
 
 
+_RERANK_SYSTEM = (
+    "You are a passage reranker for a document Q&A system. Given a user question "
+    "and a numbered list of candidate passages, decide which passages are most "
+    "relevant to ANSWERING that question. Reply with ONLY a JSON array of the "
+    "passage numbers, most relevant first, and nothing else — no prose, no code "
+    "fences. Include only genuinely relevant passages and omit clearly irrelevant "
+    "ones. Example reply: [3, 0, 7, 2]"
+)
+
+
+def _rerank_client():
+    """(client, model_id) for the cheap listwise reranker. Routes through
+    OpenRouter when enabled or as a fallback when only an OpenRouter key is set,
+    otherwise the direct OpenAI API — same policy as the title call."""
+    if config.USE_OPENROUTER or (not config.OPENAI_API_KEY and config.OPENROUTER_API_KEY):
+        return _openrouter_client(), f"openai/{config.RERANK_MODEL}"
+    return _client(), config.RERANK_MODEL
+
+
+def _parse_index_list(raw: str, n: int) -> list[int]:
+    """Pull the first JSON array of ints from a reranker reply and keep the ones
+    that are valid, in-range, and not duplicated. Tolerant of code fences and
+    trailing prose."""
+    import json
+    import re
+    m = re.search(r"\[[^\]]*\]", raw, re.S)
+    if not m:
+        return []
+    try:
+        arr = json.loads(m.group(0))
+    except Exception:
+        return []
+    out: list[int] = []
+    seen: set[int] = set()
+    for x in arr if isinstance(arr, list) else []:
+        try:
+            i = int(x)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= i < n and i not in seen:
+            seen.add(i)
+            out.append(i)
+    return out
+
+
+def rerank_indices(query: str, passages: list[str], top_k: int) -> list[int] | None:
+    """Listwise-rerank `passages` against `query`, returning up to `top_k` passage
+    indices best-first, or None to signal "fall back to the input order".
+
+    The model only ranks; it never invents indices. Any index the model omits is
+    appended in original order so no candidate is silently dropped before the cap.
+    Best-effort: returns None on any failure so the caller keeps the first-stage
+    order and answering is never blocked by the reranker."""
+    if len(passages) <= 1:
+        return None
+    numbered = "\n\n".join(f"[{i}] {p[:600]}" for i, p in enumerate(passages))
+    client, model = _rerank_client()
+    kw: dict = {
+        "model": model, "max_tokens": 200,
+        "messages": [
+            {"role": "system", "content": _RERANK_SYSTEM},
+            {"role": "user", "content":
+                f"Question: {query}\n\nCandidate passages:\n{numbered}\n\n"
+                f"Return the JSON array of the most relevant passage numbers "
+                f"(up to {top_k}), best first."},
+        ],
+    }
+    if not _omits_temperature(model):
+        kw["temperature"] = 0
+    try:
+        resp = client.chat.completions.create(**kw)
+    except Exception:
+        return None
+    order = _parse_index_list((resp.choices[0].message.content or ""), len(passages))
+    if not order:
+        return None
+    # Append any passages the reranker didn't mention, in original order, so the
+    # fallback tail is deterministic rather than lost.
+    seen = set(order)
+    order += [i for i in range(len(passages)) if i not in seen]
+    return order[:top_k]
+
+
 def _image_jpeg_b64(path: str, max_dim: int) -> str:
     """Load a page PNG, downscale to max_dim, return base64-encoded JPEG bytes."""
     img = Image.open(path).convert("RGB")

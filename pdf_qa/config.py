@@ -310,6 +310,35 @@ TOP_K = int(os.getenv("TOP_K", "8"))                 # text chunks retrieved
 MAX_IMAGES = int(os.getenv("MAX_IMAGES", "4"))       # distinct page images sent to vision
 VISION_MAX_DIM = int(os.getenv("VISION_MAX_DIM", "1536"))  # downscale cap before upload
 
+# --- Reranking ---------------------------------------------------------------
+# Second-stage reranking. The first-stage search pulls a wider candidate pool
+# (RERANK_CANDIDATES) and a cheap listwise LLM reranker re-orders it by true
+# relevance, keeping the best TOP_K. This is the single biggest retrieval-quality
+# lever in RAG. Fail-safe: any error (no key, bad output) falls back to the
+# first-stage order, so answering never breaks. Set RERANK_ENABLED=false to skip
+# it (saves one cheap model call per query).
+RERANK_ENABLED = _bool_env("RERANK_ENABLED", True)
+RERANK_CANDIDATES = int(os.getenv("RERANK_CANDIDATES", "30"))  # pool size before rerank
+RERANK_MODEL = os.getenv("RERANK_MODEL", SUMMARY_MODEL)        # cheap listwise reranker
+
+# --- Hybrid search -----------------------------------------------------------
+# Fuse dense (embedding cosine) and sparse (BM25 lexical) retrieval with
+# Reciprocal Rank Fusion. Cosine alone misses exact terms — part numbers,
+# equation names, acronyms — that a lexical match nails; BM25 alone misses
+# paraphrase. RRF combines both rankings without tuning a score scale. Set
+# HYBRID_SEARCH=false to use dense-only retrieval (the original behaviour).
+HYBRID_SEARCH = _bool_env("HYBRID_SEARCH", True)
+RRF_K = int(os.getenv("RRF_K", "60"))                # RRF damping constant
+
+# --- Retrieval confidence ("I don't know" calibration) -----------------------
+# When the best fused/cosine match is weak, the documents probably don't cover
+# the question. We surface that: a `confidence` field on the answer (for a UI
+# chip) and a low-confidence hint injected into the prompt so the model leans
+# toward "not enough data" instead of stretching. Threshold is on top cosine
+# similarity (0..1); tune per corpus.
+CONFIDENCE_LOW = float(os.getenv("CONFIDENCE_LOW", "0.30"))
+CONFIDENCE_HIGH = float(os.getenv("CONFIDENCE_HIGH", "0.45"))
+
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 

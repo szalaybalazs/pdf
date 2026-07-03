@@ -91,6 +91,36 @@ def _search_stores(stores: list[VectorStore], qvec, top_k: int,
     return sorted(hits, key=lambda h: h[1], reverse=True)[:top_k]
 
 
+def _rerank_order(question: str, pool: list, top_k: int) -> list:
+    """Rerank a candidate pool down to top_k (fail-safe, no trace). Used by the
+    mid-answer searcher, which emits its own trace row."""
+    if not config.RERANK_ENABLED or len(pool) <= top_k:
+        return pool[:top_k]
+    from .llm import rerank_indices
+    order = rerank_indices(question, [c.text for c, _ in pool], top_k)
+    return [pool[i] for i in order] if order else pool[:top_k]
+
+
+def _rerank_pool(question: str, pool: list, top_k: int, tool, debug: bool) -> list:
+    """Rerank a candidate pool down to top_k and emit a 'rerank' trace row. Falls
+    back to the pool's own similarity order on any reranker failure."""
+    if not config.RERANK_ENABLED or len(pool) <= top_k:
+        return pool[:top_k]
+    from .llm import rerank_indices
+    t0 = time.time()
+    order = rerank_indices(question, [c.text for c, _ in pool], top_k)
+    if not order:
+        tool("rerank", f"model={config.RERANK_MODEL} — fallback",
+             [f"reranker returned nothing; kept top {top_k} by similarity"], [], t0)
+        return pool[:top_k]
+    hits = [pool[i] for i in order]
+    dbg = [f"pool#{i} -> {rank + 1}.  {pool[i][0].doc}  p.{pool[i][0].page}"
+           for rank, i in enumerate(order)]
+    tool("rerank", f"model={config.RERANK_MODEL}",
+         [f"{len(pool)} candidate(s) -> {len(hits)} passage(s)"], dbg, t0)
+    return hits
+
+
 def handle_temp_index(req: dict) -> None:
     tid = req.get("threadId")
     prefix = req.get("prefix")
@@ -167,15 +197,21 @@ def handle_query(store: VectorStore | None, req: dict) -> None:
     tool("embed_query", f"model={config.EMBED_MODEL}",
          [f"1 vector · dim {len(qvec)}"], [], t0)
 
-    # 2) search
+    # 2) search — pull a wider candidate pool so the reranker has room to work,
+    # then (2b) rerank that pool down to TOP_K.
     t0 = time.time()
-    hits = _search_stores(stores, qvec, config.TOP_K, docs=doc_filter)
-    docs = {c.doc for c, _ in hits}
+    pool_k = max(config.TOP_K, config.RERANK_CANDIDATES) if config.RERANK_ENABLED else config.TOP_K
+    pool = _search_stores(stores, qvec, pool_k, docs=doc_filter)
+    top_sim = pool[0][1] if pool else 0.0   # best cosine — retrieval-confidence signal
     dbg = [f"{s:0.3f}  {c.doc}  p.{c.page}  {' '.join(c.text.split())[:60]}"
-           for c, s in hits]
+           for c, s in pool[:config.TOP_K]]
     scope = f"{len(doc_filter)} doc(s)" if doc_filter is not None else "all docs"
-    tool("search", f"top_k={config.TOP_K}, scope={scope}",
-         [f"{len(hits)} chunks from {len(docs)} doc(s)"], dbg, t0)
+    tool("search", f"top_k={config.TOP_K}, pool={len(pool)}, scope={scope}",
+         [f"{len(pool)} candidate(s) from {len({c.doc for c, _ in pool})} doc(s)"], dbg, t0)
+
+    # 2b) rerank the candidate pool to the final TOP_K passages
+    hits = _rerank_pool(question, pool, config.TOP_K, tool, debug)
+    docs = {c.doc for c, _ in hits}
 
     # 3) collect distinct page images.
     # Force page reading only on the FIRST message of a thread. On follow-ups the
@@ -208,7 +244,9 @@ def handle_query(store: VectorStore | None, req: dict) -> None:
     def searcher(q: str, k: int) -> dict:
         ts = time.time()
         qv = embed_query(q)
-        hits = _search_stores(stores, qv, k, docs=doc_filter)
+        pool_k = max(k, config.RERANK_CANDIDATES) if config.RERANK_ENABLED else k
+        pool = _search_stores(stores, qv, pool_k, docs=doc_filter)
+        hits = _rerank_order(q, pool, k)
         new_ctx, new_imgs, new_src = [], [], []
         for c, _ in hits:
             new_ctx.append({"doc": c.doc, "page": c.page, "text": c.text})

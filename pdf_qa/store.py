@@ -8,11 +8,22 @@ or Chroma later if the corpus grows large — the interface is intentionally sma
 from __future__ import annotations
 
 import json
+import math
+import re
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Iterable
 
 import numpy as np
+
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def _tokenize(text: str) -> list[str]:
+    """Lowercase word/number tokens for BM25. Keeps alphanumerics (so part
+    numbers like '6n1p' and 'el34' survive as single tokens) and drops
+    punctuation — good enough for lexical matching without a stemmer dependency."""
+    return _TOKEN_RE.findall(text.lower())
 
 
 def _l2_normalize(mat: np.ndarray) -> np.ndarray:
@@ -40,6 +51,9 @@ class VectorStore:
         self.prefix = Path(prefix)
         self.vectors: np.ndarray | None = None
         self.chunks: list[Chunk] = []
+        # BM25 index, built lazily on first bm25_search() and invalidated (set to
+        # None) whenever chunks change. Only built when hybrid search is used.
+        self._bm25: dict | None = None
 
     # --- build -------------------------------------------------------------
     def add(self, chunks: list[Chunk], vectors: np.ndarray) -> None:
@@ -51,6 +65,7 @@ class VectorStore:
         else:
             self.vectors = np.vstack([self.vectors, vectors])
         self.chunks.extend(chunks)
+        self._bm25 = None   # chunk set changed — rebuild the lexical index lazily
 
     def remove_doc(self, doc_name: str) -> int:
         """Drop every chunk (and its vector) belonging to `doc_name`. Returns the
@@ -63,6 +78,7 @@ class VectorStore:
         self.chunks = [self.chunks[i] for i in keep]
         if self.vectors is not None:
             self.vectors = self.vectors[keep] if keep else self.vectors[:0]
+        self._bm25 = None   # chunk set changed — rebuild the lexical index lazily
         return removed
 
     def save(self) -> None:
@@ -120,6 +136,63 @@ class VectorStore:
         scores = mat @ q
         idx = np.argsort(-scores)[:top_k]
         return [(chunks[i], float(scores[i])) for i in idx]
+
+    # --- lexical (BM25) search --------------------------------------------
+    def _build_bm25(self) -> None:
+        """Build an in-memory BM25 index over the chunk texts. Cheap enough to do
+        lazily (tens of thousands of chunks tokenize in well under a second) and
+        avoids an external dependency that would have to be bundled into the
+        frozen backend."""
+        tf: list[dict[str, int]] = []
+        df: dict[str, int] = {}
+        doc_len: list[int] = []
+        for c in self.chunks:
+            toks = _tokenize(c.text)
+            doc_len.append(len(toks))
+            counts: dict[str, int] = {}
+            for t in toks:
+                counts[t] = counts.get(t, 0) + 1
+            tf.append(counts)
+            for t in counts:
+                df[t] = df.get(t, 0) + 1
+        n = len(self.chunks) or 1
+        # Robertson/Sparck-Jones idf with the +0.5 smoothing; clamp at 0 so a term
+        # in more than half the corpus can't contribute a negative score.
+        idf = {t: max(0.0, math.log(1.0 + (n - d + 0.5) / (d + 0.5))) for t, d in df.items()}
+        avgdl = (sum(doc_len) / n) if n else 0.0
+        self._bm25 = {"tf": tf, "idf": idf, "doc_len": doc_len, "avgdl": avgdl or 1.0}
+
+    def bm25_search(self, query: str, top_k: int, docs: Iterable[str] | None = None,
+                    k1: float = 1.5, b: float = 0.75) -> list[tuple[Chunk, float]]:
+        """Okapi BM25 lexical search. Complements dense cosine search: it nails
+        exact-term matches (part numbers, equation names, acronyms) that embedding
+        similarity can blur. Returns [(chunk, score)] best-first; only chunks with a
+        positive score are returned."""
+        if not self.chunks:
+            return []
+        if self._bm25 is None:
+            self._build_bm25()
+        assert self._bm25 is not None
+        tf, idf = self._bm25["tf"], self._bm25["idf"]
+        doc_len, avgdl = self._bm25["doc_len"], self._bm25["avgdl"]
+        qterms = set(_tokenize(query))
+        allowed = set(docs) if docs is not None else None
+        scored: list[tuple[Chunk, float]] = []
+        for i, c in enumerate(self.chunks):
+            if allowed is not None and c.doc not in allowed:
+                continue
+            counts = tf[i]
+            dl = doc_len[i]
+            s = 0.0
+            for t in qterms:
+                f = counts.get(t)
+                if not f:
+                    continue
+                s += idf.get(t, 0.0) * (f * (k1 + 1.0)) / (f + k1 * (1.0 - b + b * dl / avgdl))
+            if s > 0:
+                scored.append((c, s))
+        scored.sort(key=lambda x: x[1], reverse=True)
+        return scored[:top_k]
 
     def __len__(self) -> int:
         return len(self.chunks)

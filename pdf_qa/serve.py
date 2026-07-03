@@ -91,6 +91,39 @@ def _search_stores(stores: list[VectorStore], qvec, top_k: int,
     return sorted(hits, key=lambda h: h[1], reverse=True)[:top_k]
 
 
+def _rrf_fuse(rankings: list[list], pool_k: int) -> list:
+    """Reciprocal Rank Fusion of several [(Chunk, score)] rankings into one.
+    Each ranking contributes 1/(RRF_K + rank) to a chunk's fused score, so a
+    chunk ranked highly by EITHER retriever floats up without either score scale
+    needing to be calibrated against the other. Chunks are keyed by their stable
+    `id`. Returns [(Chunk, fused_score)] best-first, truncated to pool_k."""
+    fused: dict[str, float] = {}
+    by_id: dict[str, object] = {}
+    for ranking in rankings:
+        for rank, (c, _s) in enumerate(ranking):
+            fused[c.id] = fused.get(c.id, 0.0) + 1.0 / (config.RRF_K + rank + 1)
+            by_id.setdefault(c.id, c)
+    order = sorted(by_id.values(), key=lambda c: fused[c.id], reverse=True)
+    return [(c, fused[c.id]) for c in order][:pool_k]
+
+
+def _retrieve_pool(stores: list[VectorStore], question: str, qvec, pool_k: int,
+                   doc_filter: list[str] | None) -> tuple[list, list, int]:
+    """Retrieve a candidate pool of up to pool_k passages. Returns
+    (pool, dense, n_sparse): `pool` is the hybrid-fused ranking (or the dense one
+    when hybrid search is off), `dense` is the raw cosine ranking (kept so the
+    caller can read the top cosine similarity as a confidence signal), and
+    `n_sparse` is how many lexical hits contributed."""
+    dense = _search_stores(stores, qvec, pool_k, docs=doc_filter)
+    if not config.HYBRID_SEARCH:
+        return dense, dense, 0
+    sparse: list = []
+    for s in stores:
+        sparse.extend(s.bm25_search(question, pool_k, docs=doc_filter))
+    sparse = sorted(sparse, key=lambda h: h[1], reverse=True)[:pool_k]
+    return _rrf_fuse([dense, sparse], pool_k), dense, len(sparse)
+
+
 def _rerank_order(question: str, pool: list, top_k: int) -> list:
     """Rerank a candidate pool down to top_k (fail-safe, no trace). Used by the
     mid-answer searcher, which emits its own trace row."""
@@ -197,16 +230,19 @@ def handle_query(store: VectorStore | None, req: dict) -> None:
     tool("embed_query", f"model={config.EMBED_MODEL}",
          [f"1 vector · dim {len(qvec)}"], [], t0)
 
-    # 2) search — pull a wider candidate pool so the reranker has room to work,
-    # then (2b) rerank that pool down to TOP_K.
+    # 2) search — pull a wider candidate pool (dense cosine + BM25 lexical, fused
+    # with RRF when hybrid search is on) so the reranker has room to work, then
+    # (2b) rerank that pool down to TOP_K.
     t0 = time.time()
     pool_k = max(config.TOP_K, config.RERANK_CANDIDATES) if config.RERANK_ENABLED else config.TOP_K
-    pool = _search_stores(stores, qvec, pool_k, docs=doc_filter)
-    top_sim = pool[0][1] if pool else 0.0   # best cosine — retrieval-confidence signal
-    dbg = [f"{s:0.3f}  {c.doc}  p.{c.page}  {' '.join(c.text.split())[:60]}"
+    pool, dense, n_sparse = _retrieve_pool(stores, question, qvec, pool_k, doc_filter)
+    top_sim = dense[0][1] if dense else 0.0   # best cosine — retrieval-confidence signal
+    dbg = [f"{s:0.4f}  {c.doc}  p.{c.page}  {' '.join(c.text.split())[:60]}"
            for c, s in pool[:config.TOP_K]]
     scope = f"{len(doc_filter)} doc(s)" if doc_filter is not None else "all docs"
-    tool("search", f"top_k={config.TOP_K}, pool={len(pool)}, scope={scope}",
+    mode = (f"hybrid(dense+bm25, rrf_k={config.RRF_K}, {n_sparse} lexical)"
+            if config.HYBRID_SEARCH else "dense")
+    tool("search", f"top_k={config.TOP_K}, pool={len(pool)}, {mode}, scope={scope}",
          [f"{len(pool)} candidate(s) from {len({c.doc for c, _ in pool})} doc(s)"], dbg, t0)
 
     # 2b) rerank the candidate pool to the final TOP_K passages
@@ -245,7 +281,7 @@ def handle_query(store: VectorStore | None, req: dict) -> None:
         ts = time.time()
         qv = embed_query(q)
         pool_k = max(k, config.RERANK_CANDIDATES) if config.RERANK_ENABLED else k
-        pool = _search_stores(stores, qv, pool_k, docs=doc_filter)
+        pool, _dense, _ns = _retrieve_pool(stores, q, qv, pool_k, doc_filter)
         hits = _rerank_order(q, pool, k)
         new_ctx, new_imgs, new_src = [], [], []
         for c, _ in hits:

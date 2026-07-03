@@ -270,6 +270,50 @@ def ingest_pdf(pdf_path: Path, store: VectorStore, embed: bool, use_ocr: bool = 
             "ocr_pages": ocr_pages}
 
 
+def _file_hash(path: Path) -> str:
+    """SHA-1 of a file's bytes, streamed so a large PDF doesn't load into memory.
+    Used to detect that a document changed on disk since it was indexed."""
+    import hashlib
+    h = hashlib.sha1()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _file_meta(path: Path, extra: dict | None = None) -> dict:
+    st = path.stat()
+    meta = {"hash": _file_hash(path), "size": st.st_size, "mtime": int(st.st_mtime)}
+    if extra:
+        meta.update(extra)
+    return meta
+
+
+def load_manifest() -> dict:
+    """Load the content-hash manifest (doc name -> meta). Missing/corrupt → {}."""
+    try:
+        import json as _json
+        return _json.loads(config.MANIFEST_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_manifest(manifest: dict) -> None:
+    import json as _json
+    config.MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
+    config.MANIFEST_PATH.write_text(_json.dumps(manifest, indent=2, ensure_ascii=False),
+                                    encoding="utf-8")
+
+
+def _remove_pages(doc_name: str) -> None:
+    """Delete the rendered page-image directory for a document (used when a
+    changed doc is re-indexed or a deleted doc is pruned)."""
+    import shutil
+    pages = config.PAGES_DIR / Path(doc_name).stem.replace(" ", "_")
+    if pages.exists():
+        shutil.rmtree(pages, ignore_errors=True)
+
+
 _emit_lock = threading.Lock()
 
 
@@ -299,25 +343,54 @@ def ingest_paths(paths, embed: bool = True, use_ocr: bool = True,
     them progressing side by side."""
     store = VectorStore.load(config.STORE_PATH) if _store_exists() else VectorStore(config.STORE_PATH)
     existing = {c.doc for c in store.chunks}
+    manifest = load_manifest()
+    manifest_lock = threading.Lock()
     pdfs = [Path(p) for p in paths]
     if json_out:
         _emit_json({"type": "ingest_start", "total": len(pdfs)})
 
     # Filter to the documents we'll actually process, single-threaded, so skips
     # are reported deterministically and the same name can't slip through twice.
-    todo: list[tuple[int, Path]] = []
+    # A document is re-indexed when its on-disk content hash differs from the
+    # manifest (edited/replaced file) even without --force; unchanged files are
+    # skipped. An indexed doc with NO manifest entry (index built before manifests
+    # existed) is trusted and its hash backfilled, so upgrading never triggers a
+    # mass re-embed.
+    todo: list[tuple[int, Path, str]] = []
     queued: set[str] = set()
     for i, p in enumerate(pdfs):
         if not p.exists():
             if json_out:
                 _emit_json({"type": "file_skip", "name": p.name, "reason": "not found"})
             continue
-        if (p.name in existing or p.name in queued) and not force:
-            if json_out:
-                _emit_json({"type": "file_skip", "name": p.name, "reason": "already indexed"})
+        if p.name in queued:
             continue
+        try:
+            h = _file_hash(p)
+        except Exception:
+            h = ""
+        prev = manifest.get(p.name)
+        if p.name in existing and not force:
+            if prev is None:
+                manifest[p.name] = _file_meta(p, {"backfilled": True})
+                if json_out:
+                    _emit_json({"type": "file_skip", "name": p.name, "reason": "already indexed"})
+                continue
+            if prev.get("hash") == h:
+                if json_out:
+                    _emit_json({"type": "file_skip", "name": p.name, "reason": "unchanged"})
+                continue
+            # Content changed on disk — drop the old chunks + page images so the
+            # re-index replaces rather than duplicates the document.
+            store.remove_doc(p.name)
+            _remove_pages(p.name)
+            if json_out:
+                _emit_json({"type": "file_changed", "name": p.name})
+        elif p.name in existing and force:
+            store.remove_doc(p.name)
+            _remove_pages(p.name)
         queued.add(p.name)
-        todo.append((i, p))
+        todo.append((i, p, h))
 
     page_budget = config.INGEST_WORKERS if workers is None else max(1, workers)
     dw = config.INGEST_DOC_WORKERS if doc_workers is None else max(1, doc_workers)
@@ -328,7 +401,7 @@ def ingest_paths(paths, embed: bool = True, use_ocr: bool = True,
     counters_lock = threading.Lock()
     added = 0
 
-    def _do_one(i: int, p: Path) -> None:
+    def _do_one(i: int, p: Path, h: str) -> None:
         nonlocal added
         if json_out:
             _emit_json({"type": "file_start", "name": p.name, "index": i + 1, "total": len(pdfs)})
@@ -351,6 +424,11 @@ def ingest_paths(paths, embed: bool = True, use_ocr: bool = True,
                                store_lock=store_lock)
             with counters_lock:
                 added += 1
+            # Record the content hash + stats so a later run skips this file
+            # while it's unchanged and re-indexes it if it's edited.
+            with manifest_lock:
+                manifest[p.name] = _file_meta(p, {"pages": stats.get("pages"),
+                                                  "chunks": stats.get("chunks")})
             if json_out:
                 _emit_json({"type": "file_done", "name": p.name, **stats})
         except Exception as e:  # noqa: BLE001
@@ -359,20 +437,85 @@ def ingest_paths(paths, embed: bool = True, use_ocr: bool = True,
                 _emit_json({"type": "file_error", "name": p.name, "message": str(e)})
 
     if concurrency <= 1:
-        for i, p in todo:
-            _do_one(i, p)
+        for i, p, h in todo:
+            _do_one(i, p, h)
     else:
         with ThreadPoolExecutor(max_workers=concurrency) as ex:
             # Drain results so any unexpected error inside a worker surfaces here.
             list(ex.map(lambda ip: _do_one(*ip), todo))
 
     store.save()
-    docs = sorted({c.doc for c in store.chunks})
+    # Keep the manifest in step with what's actually indexed: drop entries whose
+    # document no longer has any chunks (e.g. an ingest that failed after its old
+    # chunks were removed), then persist. save_manifest even when nothing was
+    # added so backfilled hashes are recorded.
+    indexed = {c.doc for c in store.chunks}
+    for name in [n for n in manifest if n not in indexed]:
+        manifest.pop(name, None)
+    save_manifest(manifest)
+    docs = sorted(indexed)
     if json_out:
         _emit_json({"type": "ingest_done", "added": added, "docs": docs})
     else:
-        print(f"Added {added} document(s). Index now has {len(docs)} doc(s).")
+        print(f"Added/updated {added} document(s). Index now has {len(docs)} doc(s).")
     return added
+
+
+def sync_dir(pdf_dir: Path | None = None, embed: bool = True, use_ocr: bool = True,
+             json_out: bool = False, workers: int | None = None,
+             doc_workers: int | None = None, prune: bool = True) -> dict:
+    """Make the index mirror a folder: ingest new and changed PDFs, skip unchanged
+    ones (by content hash), and — when `prune` — drop documents whose file is no
+    longer on disk. This is the incremental path a file-watcher or a manual
+    'refresh' calls. Returns {added, pruned, docs}."""
+    pdf_dir = pdf_dir or config.PDF_DIR
+    on_disk = sorted(pdf_dir.glob("*.pdf"))
+    on_disk_names = {p.name for p in on_disk}
+
+    pruned: list[str] = []
+    if prune and _store_exists():
+        store = VectorStore.load(config.STORE_PATH)
+        manifest = load_manifest()
+        gone = [d for d in {c.doc for c in store.chunks} if d not in on_disk_names]
+        for name in gone:
+            store.remove_doc(name)
+            _remove_pages(name)
+            manifest.pop(name, None)
+            pruned.append(name)
+            if json_out:
+                _emit_json({"type": "file_pruned", "name": name})
+        if gone:
+            store.save()
+            save_manifest(manifest)
+
+    added = ingest_paths([str(p) for p in on_disk], embed=embed, use_ocr=use_ocr,
+                         json_out=json_out, workers=workers, doc_workers=doc_workers)
+    docs = sorted({c.doc for c in VectorStore.load(config.STORE_PATH).chunks}) if _store_exists() else []
+    if not json_out:
+        print(f"Sync: {added} added/updated, {len(pruned)} pruned. Index has {len(docs)} doc(s).")
+    return {"added": added, "pruned": len(pruned), "docs": docs}
+
+
+def watch_dir(pdf_dir: Path | None = None, interval: float = 10.0, **kwargs) -> int:
+    """Poll a folder and sync whenever it changes. Polling (rather than an OS
+    file-watcher) keeps this dependency-free and portable; the sync itself is
+    hash-based, so an unchanged folder does no work beyond a cheap directory scan
+    and per-file hash. Runs until interrupted."""
+    import time
+    pdf_dir = pdf_dir or config.PDF_DIR
+    print(f"Watching {pdf_dir} every {interval:g}s (Ctrl-C to stop).")
+    prev_sig = None
+    try:
+        while True:
+            sig = sorted((p.name, p.stat().st_size, int(p.stat().st_mtime))
+                         for p in pdf_dir.glob("*.pdf"))
+            if sig != prev_sig:
+                sync_dir(pdf_dir, **kwargs)
+                prev_sig = sig
+            time.sleep(max(1.0, interval))
+    except KeyboardInterrupt:
+        print("\nStopped watching.")
+        return 0
 
 
 def main(argv=None):
@@ -382,6 +525,13 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Index PDFs for multimodal Q&A.")
     ap.add_argument("--add", nargs="+", metavar="PDF",
                     help="Incrementally add these PDF path(s) to the existing index.")
+    ap.add_argument("--sync", action="store_true",
+                    help="Mirror PDF_DIR into the index: ingest new/changed PDFs "
+                         "(by content hash), skip unchanged, prune deleted.")
+    ap.add_argument("--watch", nargs="?", type=float, const=10.0, default=None, metavar="SECS",
+                    help="Watch PDF_DIR and --sync on any change (poll every SECS, default 10).")
+    ap.add_argument("--no-prune", action="store_true",
+                    help="With --sync/--watch, keep index entries for PDFs removed from the folder.")
     ap.add_argument("--json", action="store_true",
                     help="Emit JSON progress lines (used by the desktop app).")
     ap.add_argument("--force", action="store_true",
@@ -398,6 +548,28 @@ def main(argv=None):
                     help=f"Documents to ingest concurrently (default {config.INGEST_DOC_WORKERS}); "
                          "the --workers page budget is split across them.")
     args = ap.parse_args(argv)
+
+    # Watch mode: poll PDF_DIR and sync on change (runs until interrupted).
+    if args.watch is not None:
+        return watch_dir(config.PDF_DIR, interval=args.watch, embed=not args.no_embed,
+                         use_ocr=not args.no_ocr, json_out=args.json,
+                         workers=args.workers, doc_workers=args.doc_workers,
+                         prune=not args.no_prune)
+
+    # Sync mode: one-shot folder mirror (new/changed in, deleted pruned).
+    if args.sync:
+        try:
+            sync_dir(config.PDF_DIR, embed=not args.no_embed, use_ocr=not args.no_ocr,
+                     json_out=args.json, workers=args.workers,
+                     doc_workers=args.doc_workers, prune=not args.no_prune)
+            return 0
+        except Exception as e:  # noqa: BLE001
+            capture_exception(e)
+            if args.json:
+                _emit_json({"type": "ingest_error", "message": str(e)})
+            else:
+                print(f"Sync failed: {e}", file=sys.stderr)
+            return 1
 
     # Incremental mode (used by the desktop app's "Add PDF").
     if args.add:

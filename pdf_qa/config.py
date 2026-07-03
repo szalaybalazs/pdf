@@ -25,6 +25,9 @@ DATA_DIR = Path(os.getenv("PDF_QA_DATA_DIR", str(Path(__file__).resolve().parent
 INDEX_DIR = Path(os.getenv("INDEX_DIR", str(DATA_DIR / "index")))
 PAGES_DIR = INDEX_DIR / "pages"          # rendered page PNGs
 STORE_PATH = INDEX_DIR / "store"         # vector store prefix (.npy + .jsonl)
+# Content-hash manifest: doc filename -> {hash, size, mtime, ...}. Lets ingest
+# skip unchanged files, re-index changed ones, and prune deleted ones on --sync.
+MANIFEST_PATH = INDEX_DIR / "manifest.json"
 
 # SQLite database holding chat threads (+ their search embeddings).
 DB_PATH = Path(os.getenv("PDF_QA_DB", str(DATA_DIR / "threads.db")))

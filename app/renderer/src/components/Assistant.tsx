@@ -178,6 +178,24 @@ export function Assistant({ m }: { m: AssistantMsg }) {
             {m.streaming && lastIsText && <span className="cursor">▋</span>}
           </div>
 
+          {m.done && m.confidence && m.confidence !== "high" && (
+            <div
+              className="confidence"
+              title={m.topScore != null ? `Best match similarity: ${m.topScore.toFixed(3)}` : undefined}
+              style={{
+                margin: "6px 0", padding: "5px 9px", borderRadius: 6, fontSize: 12,
+                border: "1px solid",
+                borderColor: m.confidence === "low" ? "#e0a800" : "#b9932e55",
+                background: m.confidence === "low" ? "#4a3a0033" : "#3a300022",
+                color: m.confidence === "low" ? "#e6b422" : "#c9a94e",
+              }}
+            >
+              {m.confidence === "low"
+                ? "⚠ Low retrieval confidence — the documents may not cover this question. Treat the answer with care and verify against the cited pages."
+                : "Moderate retrieval confidence — the match wasn't strong; double-check the cited pages."}
+            </div>
+          )}
+
           {m.done && (
             <div className="msg-actions">
               <button className="msg-action" onClick={copyMarkdown} title="Copy as Markdown">

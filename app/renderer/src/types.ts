@@ -9,9 +9,12 @@ export interface ToolEvent {
 }
 export interface Usage { prompt?: number; completion?: number; total?: number; reasoning?: number; }
 export interface Calc { expression: string; ok: boolean; result?: string; error?: string; verified?: boolean; }
+export type Confidence = "low" | "medium" | "high";
 export interface AnswerEvent {
   type: "answer"; reqId?: string; text: string; thinking?: string; sources: Source[];
   usage: Usage; calculations?: Calc[]; model?: string; latency?: number;  // seconds to generate
+  confidence?: Confidence;  // retrieval confidence from top match similarity
+  top_score?: number;       // best cosine similarity (0..1) behind `confidence`
 }
 export interface DeltaEvent { type: "delta"; reqId?: string; text: string; }
 export interface ModelOption { id: string; label: string; provider?: string; model?: string; via_openrouter?: boolean; }
@@ -45,6 +48,8 @@ export interface AssistantMsg {
   raw?: string;          // accumulated streamed text (may contain <thinking>)
   thinking?: string;     // parsed reasoning (legacy; inline segments preferred)
   text?: string; sources?: Source[]; usage?: Usage; calculations?: Calc[];
+  confidence?: Confidence;  // retrieval confidence (low/medium/high)
+  topScore?: number;        // best cosine similarity behind `confidence`
   latency?: number;      // seconds the backend took to generate this reply
   model?: string;        // concrete answerer model that produced this reply
   sessionId?: string;    // backend session id that produced this reply (debugging)

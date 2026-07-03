@@ -463,18 +463,38 @@ def _followup_note(history, has_images: bool) -> str:
              "No page images are attached for this follow-up. ") + base)
 
 
-def _build_messages(question, contexts, image_paths, history, think, vision=True) -> list[dict]:
-    # A text-only model gets no page images regardless of what was retrieved.
-    if not vision:
-        image_paths = []
+# Injected into the user turn when the first-stage retrieval was weak (low top
+# similarity). It reinforces the grounding rules exactly where they matter most —
+# when the documents probably don't cover the question — so the model returns an
+# honest "not enough data" instead of stretching a poor match.
+LOW_CONFIDENCE_NOTE = (
+    "RETRIEVAL CONFIDENCE: LOW — the search found no strongly-matching passages "
+    "for this question, so the documents may not cover it. Read what was retrieved "
+    "carefully and, if it does not actually contain the data or a method to derive "
+    "the answer, say \"Not enough data available in the documents\", state exactly "
+    "what is missing, and ask the user for it rather than stretching a weak match."
+)
+
+
+def _user_text(question, contexts, history, has_images, note) -> str:
     text_block = "\n\n".join(
         f"[Passage {i+1}] ({c['doc']} p.{c['page']})\n{c['text']}"
         for i, c in enumerate(contexts)
     )
+    parts = [f"Question: {question}", f"Retrieved passages:\n{text_block}",
+             _followup_note(history, has_images)]
+    if note:
+        parts.append(note)
+    return "\n\n".join(parts)
+
+
+def _build_messages(question, contexts, image_paths, history, think, vision=True, note="") -> list[dict]:
+    # A text-only model gets no page images regardless of what was retrieved.
+    if not vision:
+        image_paths = []
     content: list[dict] = [
         {"type": "text",
-         "text": f"Question: {question}\n\nRetrieved passages:\n{text_block}\n\n"
-                 f"{_followup_note(history, bool(image_paths))}"}
+         "text": _user_text(question, contexts, history, bool(image_paths), note)}
     ]
     for p in image_paths:
         content.append({"type": "image_url",
@@ -905,7 +925,7 @@ def _run_get_pages(raw_args: str, pager) -> tuple[dict, list]:
 
 def answer_stream(question: str, contexts: list[dict], image_paths: list[str],
                   history: list[dict] | None = None, think: bool = True,
-                  model: str | None = None, searcher=None, pager=None):
+                  model: str | None = None, searcher=None, pager=None, note: str = ""):
     """Streaming answer generator with the calculate + search + get_pages loop.
 
     `model` is a UI model id (see config.MODELS); it selects the provider.
@@ -920,14 +940,14 @@ def answer_stream(question: str, contexts: list[dict], image_paths: list[str],
     vision = config.model_supports_vision(spec)
     # Local CLI models run on the machine (no API) — handle before any remote path.
     if spec["provider"] == "cli":
-        yield from _answer_stream_cli(question, contexts, image_paths, history, think, spec["model"])
+        yield from _answer_stream_cli(question, contexts, image_paths, history, think, spec["model"], note=note)
         return
     # Local OpenAI-compatible server: same streaming path as remote OpenAI, but the
     # client points at LOCAL_BASE_URL and we send the server's native model id
     # (OpenRouter routing never applies to a local model).
     if spec["provider"] == "local":
         yield from _answer_stream_openai(question, contexts, image_paths, history,
-                                         think, spec["model"], searcher, pager, spec=spec, vision=vision)
+                                         think, spec["model"], searcher, pager, spec=spec, vision=vision, note=note)
         return
     # AWS Bedrock. Claude isn't on the OpenAI-compatible mantle gateway so it uses
     # the boto3 Converse path; GLM and DeepSeek speak mantle Chat Completions and
@@ -935,30 +955,30 @@ def answer_stream(question: str, contexts: list[dict], image_paths: list[str],
     if spec["provider"] == "bedrock":
         if spec.get("api") == "converse":   # Claude: bedrock-runtime Converse (not on mantle)
             yield from _answer_stream_bedrock_converse(question, contexts, image_paths, history,
-                                                       think, spec["model"], searcher, pager, vision=vision)
+                                                       think, spec["model"], searcher, pager, vision=vision, note=note)
         else:                                # GLM, DeepSeek: Chat Completions on mantle
             yield from _answer_stream_openai(question, contexts, image_paths, history,
-                                             think, spec["model"], searcher, pager, spec=spec, vision=vision)
+                                             think, spec["model"], searcher, pager, spec=spec, vision=vision, note=note)
         return
     # Direct-to-OpenAI override: send the native model id straight to OpenAI,
     # skipping OpenRouter even when it's globally enabled.
     if spec.get("direct"):
         yield from _answer_stream_openai(question, contexts, image_paths, history,
-                                         think, spec["model"], searcher, pager, spec=spec, vision=vision)
+                                         think, spec["model"], searcher, pager, spec=spec, vision=vision, note=note)
         return
     # When OpenRouter is on, everything (incl. Claude) goes through the OpenAI-
     # compatible path; otherwise Anthropic uses its native SDK path.
     if not config.USE_OPENROUTER and spec["provider"] == "anthropic":
         yield from _answer_stream_anthropic(question, contexts, image_paths,
-                                            history, think, spec["model"], searcher, pager, vision=vision)
+                                            history, think, spec["model"], searcher, pager, vision=vision, note=note)
     else:
         yield from _answer_stream_openai(question, contexts, image_paths,
-                                         history, think, _chat_model_id(spec), searcher, pager, vision=vision)
+                                         history, think, _chat_model_id(spec), searcher, pager, vision=vision, note=note)
 
 
 def _answer_stream_openai(question: str, contexts: list[dict], image_paths: list[str],
                           history: list[dict] | None, think: bool, model: str,
-                          searcher=None, pager=None, spec: dict | None = None, vision: bool = True):
+                          searcher=None, pager=None, spec: dict | None = None, vision: bool = True, note: str = ""):
     import time
     if not vision:
         image_paths = []   # text-only model — never send page images
@@ -974,7 +994,7 @@ def _answer_stream_openai(question: str, contexts: list[dict], image_paths: list
     # would gate the visible answer behind a long emitted block).
     if reasoning_model or glm_model:
         think = False
-    messages = _build_messages(question, contexts, image_paths, history, think, vision)
+    messages = _build_messages(question, contexts, image_paths, history, think, vision, note=note)
     tools = [CALC_TOOL] + ([SEARCH_TOOL] if searcher else []) + ([GET_PAGES_TOOL] if pager else [])
     t0 = time.time()
     content_all: list = []
@@ -1187,7 +1207,7 @@ def _answer_stream_openai(question: str, contexts: list[dict], image_paths: list
 # ---- Local CLI path (claude -p) ---------------------------------------------
 
 def _answer_stream_cli(question: str, contexts: list[dict], image_paths: list[str],
-                       history: list[dict] | None, think: bool, model: str):
+                       history: list[dict] | None, think: bool, model: str, note: str = ""):
     """Answer via a locally-installed model CLI (Claude Code's `claude -p`).
 
     Text-only: the CLI receives the retrieved passage text + question and streams
@@ -1212,7 +1232,7 @@ def _answer_stream_cli(question: str, contexts: list[dict], image_paths: list[st
     if history:
         hist = "\n\n".join(f"{h['role'].upper()}: {h['content']}" for h in history) + "\n\n"
     prompt = (f"{hist}Retrieved passages from the indexed PDF library:\n{passages}\n\n"
-              f"Question: {question}")
+              f"Question: {question}" + (f"\n\n{note}" if note else ""))
 
     args = [binname, "-p", "--append-system-prompt", _system_prompt(False)]
     if model:
@@ -1248,20 +1268,15 @@ def _answer_stream_cli(question: str, contexts: list[dict], image_paths: list[st
 
 # ---- Anthropic (Claude) path ------------------------------------------------
 
-def _build_anthropic_messages(question, contexts, image_paths, history, vision=True) -> list[dict]:
+def _build_anthropic_messages(question, contexts, image_paths, history, vision=True, note="") -> list[dict]:
     """Anthropic puts the system prompt in its own parameter and uses content
     blocks with base64 image sources, so we build messages separately from the
     OpenAI path (the prompt text and tool are shared)."""
     if not vision:
         image_paths = []
-    text_block = "\n\n".join(
-        f"[Passage {i+1}] ({c['doc']} p.{c['page']})\n{c['text']}"
-        for i, c in enumerate(contexts)
-    )
     content: list[dict] = [
         {"type": "text",
-         "text": f"Question: {question}\n\nRetrieved passages:\n{text_block}\n\n"
-                 f"{_followup_note(history, bool(image_paths))}"}
+         "text": _user_text(question, contexts, history, bool(image_paths), note)}
     ]
     for p in image_paths:
         content.append({"type": "image",
@@ -1276,13 +1291,13 @@ def _build_anthropic_messages(question, contexts, image_paths, history, vision=T
 
 def _answer_stream_anthropic(question: str, contexts: list[dict], image_paths: list[str],
                              history: list[dict] | None, think: bool, model: str,
-                             searcher=None, pager=None, vision: bool = True):
+                             searcher=None, pager=None, vision: bool = True, note: str = ""):
     import json
     import time
     if not vision:
         image_paths = []
     client = _anthropic_client()
-    messages = _build_anthropic_messages(question, contexts, image_paths, history, vision)
+    messages = _build_anthropic_messages(question, contexts, image_paths, history, vision, note=note)
     system = _system_prompt(think, vision)
     tools = ([ANTHROPIC_CALC_TOOL]
              + ([ANTHROPIC_SEARCH_TOOL] if searcher else [])
@@ -1397,15 +1412,10 @@ def _converse_image_block(path: str) -> dict:
                       "source": {"bytes": base64.b64decode(_image_jpeg_b64(path, config.VISION_MAX_DIM))}}}
 
 
-def _build_converse_user_content(question, contexts, image_paths, history, vision) -> list:
+def _build_converse_user_content(question, contexts, image_paths, history, vision, note="") -> list:
     if not vision:
         image_paths = []
-    text_block = "\n\n".join(
-        f"[Passage {i+1}] ({c['doc']} p.{c['page']})\n{c['text']}"
-        for i, c in enumerate(contexts)
-    )
-    blocks: list = [{"text": f"Question: {question}\n\nRetrieved passages:\n{text_block}\n\n"
-                             f"{_followup_note(history, bool(image_paths))}"}]
+    blocks: list = [{"text": _user_text(question, contexts, history, bool(image_paths), note)}]
     for p in image_paths:
         blocks.append(_converse_image_block(p))
     return blocks
@@ -1413,7 +1423,7 @@ def _build_converse_user_content(question, contexts, image_paths, history, visio
 
 def _answer_stream_bedrock_converse(question: str, contexts: list[dict], image_paths: list[str],
                                     history: list[dict] | None, think: bool, model: str,
-                                    searcher=None, pager=None, vision: bool = True):
+                                    searcher=None, pager=None, vision: bool = True, note: str = ""):
     import json
     import time
     if not vision:
@@ -1432,7 +1442,7 @@ def _answer_stream_bedrock_converse(question: str, contexts: list[dict], image_p
     for h in (history or []):
         messages.append({"role": h["role"], "content": [{"text": h["content"]}]})
     messages.append({"role": "user",
-                     "content": _build_converse_user_content(question, contexts, image_paths, history, vision)})
+                     "content": _build_converse_user_content(question, contexts, image_paths, history, vision, note=note)})
 
     t0 = time.time()
     content_all: list = []

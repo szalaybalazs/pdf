@@ -531,6 +531,7 @@ export function handleServeEvent(ev: ServeEvent): void {
     const a = ev as AnswerEvent;
     msg.text = a.text; msg.thinking = a.thinking ?? msg.thinking;
     msg.sources = a.sources; msg.usage = a.usage; msg.calculations = a.calculations;
+    msg.confidence = a.confidence; msg.topScore = a.top_score;
     msg.latency = a.latency;
     msg.model = a.model; msg.sessionId = (a as any).session_id; msg.streaming = false; msg.done = true;
     if (a.usage && a.usage.total) updateTokenStats(a.usage);

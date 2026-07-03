@@ -189,8 +189,20 @@ def handle_temp_index_clear(req: dict) -> None:
             TEMP_STORES.pop(tid, None)
 
 
+def _confidence_level(top_sim: float) -> str:
+    """Bucket the best cosine similarity into a retrieval-confidence level. Low
+    means the corpus probably doesn't cover the question — surfaced to the user
+    as a chip and fed to the model as a grounding hint."""
+    if top_sim >= config.CONFIDENCE_HIGH:
+        return "high"
+    if top_sim >= config.CONFIDENCE_LOW:
+        return "medium"
+    return "low"
+
+
 def handle_query(store: VectorStore | None, req: dict) -> None:
-    from .llm import answer_stream, embed_query, split_thinking, extract_inline_tool_calls
+    from .llm import (answer_stream, embed_query, split_thinking,
+                      extract_inline_tool_calls, LOW_CONFIDENCE_NOTE)
 
     rid = req.get("reqId")
     question = req["question"]
@@ -248,6 +260,12 @@ def handle_query(store: VectorStore | None, req: dict) -> None:
     # 2b) rerank the candidate pool to the final TOP_K passages
     hits = _rerank_pool(question, pool, config.TOP_K, tool, debug)
     docs = {c.doc for c, _ in hits}
+
+    # Retrieval confidence: a weak best match means the documents probably don't
+    # cover the question. Feed that to the model as a grounding hint (so it leans
+    # toward an honest "not enough data") and report it to the UI as a chip.
+    confidence = _confidence_level(top_sim)
+    conf_note = LOW_CONFIDENCE_NOTE if confidence == "low" else ""
 
     # 3) collect distinct page images.
     # Force page reading only on the FIRST message of a thread. On follow-ups the
@@ -361,7 +379,7 @@ def handle_query(store: VectorStore | None, req: dict) -> None:
     t0 = time.time()
     final = None
     for ev in answer_stream(question, contexts, images, history=history,
-                            model=model_id, searcher=searcher, pager=pager):
+                            model=model_id, searcher=searcher, pager=pager, note=conf_note):
         if ev["type"] == "delta":
             emit({"type": "delta", "reqId": rid, "text": ev["text"]})
         elif ev["type"] == "tool_call":  # a calculate()/search()/get_pages() call
@@ -411,6 +429,7 @@ def handle_query(store: VectorStore | None, req: dict) -> None:
         c["verified"] = bool(c.get("ok") and c.get("result") and str(c["result"]) in ans)
     emit({"type": "answer", "reqId": rid, "text": ans, "thinking": thinking,
           "sources": sources, "usage": u, "calculations": calcs, "model": model_name,
+          "confidence": confidence, "top_score": round(top_sim, 3),
           "latency": (final or {}).get("latency")})
 
 

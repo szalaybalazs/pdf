@@ -80,9 +80,13 @@ win:
   verifyUpdateCodeSignature: false
 
 nsis:
-  oneClick: false
+  # One-click, per-user installer → auto-updates apply silently in the background
+  # and the app relaunches, instead of re-running the install wizard every update.
+  # (This is how Slack/Discord/VS Code update.) Trade-off: no install-dir chooser;
+  # it installs to %LOCALAPPDATA%\Programs\<app>. Set oneClick:false only if you
+  # need the dir chooser and accept the wizard-on-update behaviour.
+  oneClick: true
   perMachine: false
-  allowToChangeInstallationDirectory: true
   artifactName: "${productName}-Setup-${version}.${ext}"
   installerIcon: build/icon.ico
   uninstallerIcon: build/icon.ico

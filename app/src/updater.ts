@@ -52,8 +52,9 @@ export function installDownloadedUpdate(): boolean {
     return false;
   }
   log("info", "auto-update: user requested install — quitting to apply");
-  // isSilent=false (show progress on Windows), isForceRunAfter=true (relaunch).
-  autoUpdater.quitAndInstall(false, true);
+  // isSilent=true (apply silently — no installer wizard on Windows; requires the
+  // one-click NSIS installer), isForceRunAfter=true (relaunch after install).
+  autoUpdater.quitAndInstall(true, true);
   return true;
 }
 

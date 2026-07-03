@@ -13,6 +13,7 @@ import type {
   Thread, AssistantMsg, ModelOption, Source, Usage,
   ServeEvent, ReadyEvent, BackendError, ThreadsEvent,
   ThreadTitleEvent, ThreadResultsEvent, ThreadResult, ToolEvent, AnswerEvent, DeltaEvent,
+  HighlightedEvent,
 } from "./types";
 
 // ---- subscription plumbing -------------------------------------------------
@@ -235,6 +236,29 @@ export async function addTempPdfsToThread(filePaths: string[]): Promise<void> {
     store.ingest = { text: `Could not add PDF: ${String((e as Error)?.message || e)}`, percent: null };
     bump();
   }
+}
+
+// ---- citation click: open the cited page, highlighted -----------------------
+// A citation click asks the backend to render the page with the cited passage
+// highlighted, then opens that. Requests are correlated by a "hl-" reqId; the
+// plain image is remembered as a fallback so a highlight miss still opens the
+// page. Keyed by reqId so overlapping clicks don't clobber each other.
+const highlightPending = new Map<string, string>();
+
+export function openCitation(image: string, doc?: string, page?: number,
+                             snippet?: string): void {
+  if (!doc || !page) { void api.openFigure(image); return; }   // nothing to locate
+  const reqId = "hl-" + uid();
+  highlightPending.set(reqId, image);
+  const question = lastUserText(activeThread() || ({} as Thread));
+  api.sendRequest({ type: "highlight", reqId, doc, page, query: question, snippet: snippet || "" });
+  // Safety net: if the backend never answers, open the plain page after a beat.
+  setTimeout(() => {
+    if (highlightPending.has(reqId)) {
+      highlightPending.delete(reqId);
+      void api.openFigure(image);
+    }
+  }, 4000);
 }
 
 // ---- sending ---------------------------------------------------------------
@@ -472,6 +496,14 @@ export function handleServeEvent(ev: ServeEvent): void {
     store.ingest = { text: `Removed ${e.doc} (${e.removed} chunks)`, percent: null };
     bump();
     setTimeout(() => { store.ingest = { text: "", percent: null }; bump(); }, 3000);
+    return;
+  }
+  if (ev.type === "highlighted") {
+    const e = ev as HighlightedEvent;
+    const fallback = e.reqId ? highlightPending.get(e.reqId) : undefined;
+    if (e.reqId) highlightPending.delete(e.reqId);
+    const path = e.path || fallback;   // open the highlighted render, else the plain page
+    if (path) void api.openFigure(path);
     return;
   }
   if (ev.type === "threads") { hydrateThreads((ev as ThreadsEvent).threads || []); return; }

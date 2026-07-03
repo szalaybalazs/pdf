@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { AssistantMsg, ToolEvent, Segment, Calc } from "../types";
-import { store, activeThread, regenerate, threadOff } from "../store";
+import { store, activeThread, regenerate, threadOff, openCitation } from "../store";
 import { api } from "../trpc";
 import { platformText, SEP, LEADING_SEP } from "../platform";
 import {
@@ -119,11 +119,17 @@ export function Assistant({ m }: { m: AssistantMsg }) {
     void api.exportPdf(html, title);
   };
 
-  // figure clicks (event delegation): open the page image in the OS viewer
+  // figure clicks (event delegation): open the cited page in the OS viewer, with
+  // the cited passage highlighted when the citation carries doc/page metadata.
   const onFigClick = (e: React.MouseEvent) => {
     const el = (e.target as HTMLElement).closest("[data-img]") as HTMLElement | null;
     const img = el?.getAttribute("data-img");
-    if (img) void api.openFigure(img);
+    if (!img) return;
+    const doc = el?.getAttribute("data-doc") || undefined;
+    const pageAttr = el?.getAttribute("data-page");
+    const page = pageAttr ? parseInt(pageAttr, 10) : undefined;
+    const snippet = el?.getAttribute("data-snippet") || undefined;
+    openCitation(img, doc, page, snippet);
   };
 
   // annotate calc results across ALL text segments with a shared "used" set so

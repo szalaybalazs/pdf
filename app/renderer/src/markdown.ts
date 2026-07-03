@@ -244,7 +244,11 @@ export function linkifyCitationsHtml(html: string, sources: Source[]): string {
     const page = parseInt(pageStr, 10);
     const src = sources.find((s) => s.page === page);
     if (!src) return whole;
-    return `<a class="fig" data-img="${escapeHtml(src.image)}">${whole}</a>`;
+    // data-doc/-page/-snippet let the click handler ask the backend for a
+    // highlighted render of the cited passage (falls back to the plain image).
+    return `<a class="fig" data-img="${escapeHtml(src.image)}"`
+      + ` data-doc="${escapeHtml(src.doc)}" data-page="${page}"`
+      + ` data-snippet="${escapeHtml((src.snippet || "").slice(0, 400))}">${whole}</a>`;
   });
 }
 

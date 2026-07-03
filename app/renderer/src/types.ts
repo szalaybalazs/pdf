@@ -2,7 +2,8 @@
  *  renderer's in-memory chat model. */
 
 // ---- backend protocol ------------------------------------------------------
-export interface Source { doc: string; page: number; image: string; }
+export interface Source { doc: string; page: number; image: string; snippet?: string; }
+export interface HighlightedEvent { type: "highlighted"; reqId?: string; path: string | null; }
 export interface ToolEvent {
   type: "tool"; reqId?: string; name: string; args: string;
   detail: string[]; debug: string[]; duration: number;
@@ -29,7 +30,7 @@ export interface ThreadResult { id: string; title: string; score: number; }
 export interface ThreadResultsEvent { type: "thread_results"; q: string; results: ThreadResult[]; }
 export type ServeEvent =
   | ToolEvent | AnswerEvent | ReadyEvent | BackendError | DeltaEvent
-  | ThreadsEvent | ThreadTitleEvent | ThreadResultsEvent
+  | ThreadsEvent | ThreadTitleEvent | ThreadResultsEvent | HighlightedEvent
   | { type: string; reqId?: string };
 
 // ---- in-memory chat model --------------------------------------------------

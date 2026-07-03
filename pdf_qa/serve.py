@@ -282,7 +282,8 @@ def handle_query(store: VectorStore | None, req: dict) -> None:
             if img not in seen:
                 seen.add(img)
                 images.append(img)
-                sources.append({"doc": c.doc, "page": c.page, "image": img})
+                sources.append({"doc": c.doc, "page": c.page, "image": img,
+                                "snippet": c.text[:400]})
             if len(images) >= config.MAX_IMAGES:
                 break
         dbg = [f"{os.path.basename(p)}  ({_img_dims(p)})" for p in images]
@@ -308,7 +309,7 @@ def handle_query(store: VectorStore | None, req: dict) -> None:
             if img not in seen:
                 seen.add(img)
                 new_imgs.append(img)
-                s = {"doc": c.doc, "page": c.page, "image": img}
+                s = {"doc": c.doc, "page": c.page, "image": img, "snippet": c.text[:400]}
                 sources.append(s)
                 new_src.append(s)
         tool("search_documents", q,
@@ -365,7 +366,7 @@ def handle_query(store: VectorStore | None, req: dict) -> None:
             if img not in seen:
                 seen.add(img)
                 new_imgs.append(img)
-                s = {"doc": doc, "page": pg, "image": img}
+                s = {"doc": doc, "page": pg, "image": img, "snippet": text[:400]}
                 sources.append(s)
                 new_src.append(s)
         tool("get_pages", f"{doc} pp.{','.join(str(p) for p in wanted)}",
@@ -622,6 +623,17 @@ def main(argv=None) -> int:
             except Exception as e:  # noqa: BLE001
                 capture_exception(e)
                 emit({"type": "error", "reqId": req.get("reqId"), "message": f"temp index failed: {e}"})
+        elif kind == "highlight":
+            # Produce a page image with the cited passage highlighted; the UI opens
+            # the returned path (or falls back to the plain page image on null).
+            try:
+                from .highlight import annotate_page
+                path = annotate_page(str(req.get("doc") or ""), int(req.get("page") or 0),
+                                     str(req.get("query") or ""), str(req.get("snippet") or ""))
+            except Exception as e:  # noqa: BLE001
+                capture_exception(e)
+                path = None
+            emit({"type": "highlighted", "reqId": req.get("reqId"), "path": path})
         elif kind == "temp_index_clone":
             handle_temp_index_clone(req)
         elif kind == "temp_index_clear":

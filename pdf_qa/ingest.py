@@ -118,6 +118,36 @@ def page_text(page: "fitz.Page", img_path: Path, use_ocr: bool) -> tuple[str, st
     return "", "none"
 
 
+def extract_table_chunks(page: "fitz.Page", pdf_path: Path, pno: int,
+                         rel_img: str, start_index: int) -> list[Chunk]:
+    """Reconstruct tables on a page into markdown chunks. Each table becomes one
+    chunk (text = a '[Table p.N]' marker + the markdown grid), so the numbers in
+    a table are searchable as cells rather than lost in the prose reading order.
+    Best-effort: any failure yields no table chunks and never aborts the page."""
+    if not config.EXTRACT_TABLES:
+        return []
+    try:
+        finder = page.find_tables()
+        tables = list(getattr(finder, "tables", []) or [])
+    except Exception:
+        return []
+    out: list[Chunk] = []
+    for ti, tab in enumerate(tables):
+        try:
+            md = (tab.to_markdown() or "").strip()
+        except Exception:
+            continue
+        # A degenerate "table" (one row, or no cell pipes) is usually a false
+        # positive from ruled text — skip it rather than pollute the index.
+        if not md or md.count("\n") < 1 or md.count("|") < 4:
+            continue
+        text = f"[Table on p.{pno + 1}]\n{md}"[:config.TABLE_CHARS_MAX]
+        out.append(Chunk(id=f"{pdf_path.name}:p{pno + 1:04d}:t{ti}",
+                         doc=pdf_path.name, page=pno + 1, chunk_index=start_index + ti,
+                         text=text, image_path=rel_img, kind="table"))
+    return out
+
+
 def _process_page(pdf_path: Path, safe: str, pno: int, use_ocr: bool,
                   doc_for) -> tuple[int, list[Chunk], int, int, int]:
     """Render + extract one page. Returns (pno, chunks, scanned, ocr_used, failed).
@@ -146,6 +176,9 @@ def _process_page(pdf_path: Path, safe: str, pno: int, use_ocr: bool,
               text=ctext, image_path=rel_img)
         for ci, ctext in enumerate(chunk_page_text(text, config.CHUNK_WORDS, config.CHUNK_OVERLAP))
     ]
+    # Tables are extracted separately and appended as their own chunks, numbered
+    # after the prose chunks so chunk_index stays unique within the page.
+    chunks += extract_table_chunks(page, pdf_path, pno, rel_img, len(chunks))
     return pno, chunks, scanned, ocr_used, failed
 
 
@@ -232,6 +265,7 @@ def ingest_pdf(pdf_path: Path, store: VectorStore, embed: bool, use_ocr: bool = 
         _add(pending_chunks, np.zeros((len(pending_texts), 1), dtype="float32"))
 
     return {"pages": n_pages, "chunks": len(pending_chunks),
+            "table_chunks": sum(1 for c in pending_chunks if c.kind == "table"),
             "scanned_pages": scanned_pages, "failed_pages": failed_pages,
             "ocr_pages": ocr_pages}
 
@@ -401,17 +435,20 @@ def main(argv=None):
         print(f"OCR fallback: {'ON' if use_ocr else 'OFF'}")
     print()
 
-    totals = {"pages": 0, "chunks": 0, "scanned_pages": 0, "failed_pages": 0, "ocr_pages": 0}
+    totals = {"pages": 0, "chunks": 0, "table_chunks": 0, "scanned_pages": 0,
+              "failed_pages": 0, "ocr_pages": 0}
     for p in pdfs:
         stats = ingest_pdf(p, store, embed=not args.no_embed, use_ocr=use_ocr, workers=workers)
         for k in totals:
             totals[k] += stats[k]
         print(f"  {p.name:50} {stats['pages']:4} pages  "
-              f"{stats['chunks']:5} chunks  {stats['ocr_pages']:3} ocr"
+              f"{stats['chunks']:5} chunks  {stats['table_chunks']:3} tables"
+              f"  {stats['ocr_pages']:3} ocr"
               f"  {stats['scanned_pages']:3} scanned  {stats['failed_pages']:3} failed")
 
     store.save()
-    print(f"\nDone. {totals['pages']} pages, {totals['chunks']} chunks, "
+    print(f"\nDone. {totals['pages']} pages, {totals['chunks']} chunks "
+          f"({totals['table_chunks']} tables), "
           f"{totals['ocr_pages']} OCR'd, {totals['scanned_pages']} scanned, "
           f"{totals['failed_pages']} failed renders.")
     print(f"Index written to {config.INDEX_DIR}")

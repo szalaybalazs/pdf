@@ -286,6 +286,13 @@ CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "60"))  # words of overlap betwee
 EMBED_BATCH = int(os.getenv("EMBED_BATCH", "128"))   # embeddings per API request
 OCR_LANG = os.getenv("OCR_LANG", "eng")              # Tesseract language(s), e.g. "eng+deu"
 
+# Extract tables as their own markdown chunks (PyMuPDF find_tables). A table's
+# numbers live in a grid the prose flow mangles, so embedding the reconstructed
+# markdown lets numeric/tabular queries hit the actual cells instead of relying on
+# the vision model to read the rendered page. Set EXTRACT_TABLES=false to skip.
+EXTRACT_TABLES = _bool_env("EXTRACT_TABLES", True)
+TABLE_CHARS_MAX = int(os.getenv("TABLE_CHARS_MAX", "4000"))  # cap per table chunk
+
 # Worker threads for ingestion. Page rendering (PyMuPDF releases the GIL), OCR
 # (a tesseract subprocess) and embedding (network) all run concurrently across
 # these, so a multi-hundred-page book ingests several times faster. Each worker

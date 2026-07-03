@@ -44,6 +44,8 @@ class Chunk:
     chunk_index: int   # chunk within the page
     text: str          # the chunk text (what gets embedded)
     image_path: str    # path to the rendered page PNG
+    kind: str = "text" # "text" (prose) or "table" (extracted table markdown).
+                       # Defaulted so metadata written by older builds still loads.
 
 
 class VectorStore:

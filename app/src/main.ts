@@ -745,19 +745,48 @@ async function showDocMenuAction(name: string): Promise<void> {
 }
 
 // Native right-click menu for a chat thread in the sidebar.
-async function showThreadMenuAction(input: { title: string; messages: unknown[] }): Promise<void> {
+async function showThreadMenuAction(
+  input: { title: string; messages: unknown[]; markdown?: string; filename?: string },
+): Promise<void> {
   log("info", `thread-menu "${input.title}" messages=${input.messages.length}`);
+  const md = input.markdown || "";
   const menu = Menu.buildFromTemplate([
     { label: input.title || "Thread", enabled: false },
     { type: "separator" },
     {
+      label: "Copy as Markdown",
+      enabled: !!md,
+      click: () => { clipboard.writeText(md); },
+    },
+    {
+      label: "Export as Markdown…",
+      enabled: !!md,
+      click: () => { void saveMarkdownFile(md, input.filename || "conversation"); },
+    },
+    {
       label: "Copy messages as JSON",
-      click: () => {
-        clipboard.writeText(JSON.stringify(input.messages || [], null, 2));
-      },
+      click: () => { clipboard.writeText(JSON.stringify(input.messages || [], null, 2)); },
     },
   ]);
   menu.popup({ window: win ?? undefined });
+}
+
+async function saveMarkdownFile(markdown: string, filename: string): Promise<void> {
+  if (!win) return;
+  const res = await dialog.showSaveDialog(win, {
+    title: "Export thread as Markdown",
+    defaultPath: `${filename.replace(/[\/:*?"<>|]+/g, "_").slice(0, 60) || "conversation"}.md`,
+    filters: [{ name: "Markdown", extensions: ["md"] }],
+  });
+  if (res.canceled || !res.filePath) { log("info", "export-md canceled"); return; }
+  try {
+    fs.writeFileSync(res.filePath, markdown, "utf-8");
+    log("info", `export-md -> ${res.filePath}`);
+    track("thread_exported_md");
+    void shell.showItemInFolder(res.filePath);
+  } catch (e) {
+    log("error", "export-md failed", (e as Error).message);
+  }
 }
 
 function modelProviderLabel(provider: string): string {

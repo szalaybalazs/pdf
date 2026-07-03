@@ -9,6 +9,7 @@ import { useSyncExternalStore } from "react";
 import { api } from "./trpc";
 import type { UpdateState } from "./trpc";
 import { SEP } from "./platform";
+import { threadToMarkdown, threadFilename } from "./export";
 import type {
   Thread, AssistantMsg, ModelOption, Source, Usage,
   ServeEvent, ReadyEvent, BackendError, ThreadsEvent,
@@ -380,7 +381,9 @@ export function showDocMenu(name: string): void {
 export function showThreadMenu(id: string): void {
   const t = store.threads.find((thread) => thread.id === id);
   if (!t) return;
-  void api.showThreadMenu(t.title, t.messages);   // native Electron menu; copy handled in main
+  // Serialize the transcript here (the renderer owns the message model) and hand
+  // it to the native menu so its copy/export actions have ready-made Markdown.
+  void api.showThreadMenu(t.title, t.messages, threadToMarkdown(t), threadFilename(t));
 }
 
 export function removeDoc(name: string): void {

@@ -22,7 +22,8 @@ export const api = {
   addTempPdfs: (threadId: string, filePaths: string[]) => trpc.addTempPdfs.mutate({ threadId, filePaths }),
   exportPdf: (html: string, title: string) => trpc.exportPdf.mutate({ html, title }),
   showDocMenu: (name: string) => trpc.showDocMenu.mutate(name),
-  showThreadMenu: (title: string, messages: unknown[]) => trpc.showThreadMenu.mutate({ title, messages }),
+  showThreadMenu: (title: string, messages: unknown[], markdown: string, filename: string) =>
+    trpc.showThreadMenu.mutate({ title, messages, markdown, filename }),
   showModelMenu: (models: { id: string; label: string; provider?: string; model?: string; via_openrouter?: boolean }[], selectedModel: string) =>
     trpc.showModelMenu.mutate({ models, selectedModel }),
   getSettings: () => trpc.getSettings.query(),

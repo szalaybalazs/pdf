@@ -315,6 +315,19 @@ def save_manifest(manifest: dict) -> None:
                                     encoding="utf-8")
 
 
+def write_embedder_manifest() -> None:
+    """Record which embedder built the index so the server can detect a mismatch
+    at query time. Best-effort; never blocks ingest."""
+    try:
+        import json as _json
+        from .llm import embedder_id
+        config.EMBEDDER_PATH.parent.mkdir(parents=True, exist_ok=True)
+        config.EMBEDDER_PATH.write_text(_json.dumps({"embedder": embedder_id()}),
+                                        encoding="utf-8")
+    except Exception:
+        pass
+
+
 def _remove_pages(doc_name: str) -> None:
     """Delete the rendered page-image directory for a document (used when a
     changed doc is re-indexed or a deleted doc is pruned)."""
@@ -463,6 +476,8 @@ def ingest_paths(paths, embed: bool = True, use_ocr: bool = True,
     for name in [n for n in manifest if n not in indexed]:
         manifest.pop(name, None)
     save_manifest(manifest)
+    if embed:
+        write_embedder_manifest()   # record the embedder that built these vectors
     docs = sorted(indexed)
     if json_out:
         _emit_json({"type": "ingest_done", "added": added, "docs": docs})
@@ -629,6 +644,8 @@ def main(argv=None):
               f"  {stats['scanned_pages']:3} scanned  {stats['failed_pages']:3} failed")
 
     store.save()
+    if not args.no_embed:
+        write_embedder_manifest()
     print(f"\nDone. {totals['pages']} pages, {totals['chunks']} chunks "
           f"({totals['table_chunks']} tables), "
           f"{totals['ocr_pages']} OCR'd, {totals['scanned_pages']} scanned, "

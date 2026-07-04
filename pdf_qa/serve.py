@@ -596,6 +596,24 @@ def main(argv=None) -> int:
         ):
             print(line, file=sys.stderr, flush=True)
 
+    # Warn if the index was built with a different embedder than we're now
+    # configured to query with — that silently degrades (or crashes) search.
+    try:
+        if config.EMBEDDER_PATH.exists():
+            from .llm import embedder_id
+            built = json.loads(config.EMBEDDER_PATH.read_text(encoding="utf-8")).get("embedder")
+            if built and built != embedder_id():
+                bar = "!" * 64
+                for line in (bar,
+                             f"pdf_qa EMBEDDER MISMATCH — index built with '{built}' but "
+                             f"configured embedder is '{embedder_id()}'.",
+                             "Search will be inaccurate or fail. Re-index (python -m pdf_qa.ingest",
+                             "--sync) with the new embedder, or set EMBED_PROVIDER/EMBED_MODEL back.",
+                             bar):
+                    print(line, file=sys.stderr, flush=True)
+    except Exception:
+        pass
+
     tstore = ThreadStore(config.DB_PATH)
     try:
         store = VectorStore.load(config.STORE_PATH)

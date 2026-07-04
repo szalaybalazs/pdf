@@ -28,6 +28,10 @@ STORE_PATH = INDEX_DIR / "store"         # vector store prefix (.npy + .jsonl)
 # Content-hash manifest: doc filename -> {hash, size, mtime, ...}. Lets ingest
 # skip unchanged files, re-index changed ones, and prune deleted ones on --sync.
 MANIFEST_PATH = INDEX_DIR / "manifest.json"
+# Records which embedder built the index (provider + model). Checked at startup:
+# querying an index with a different embedder than built it is a silent accuracy
+# bug (or a hard dimension-mismatch crash), so we warn loudly on a mismatch.
+EMBEDDER_PATH = INDEX_DIR / "embedder.json"
 
 # SQLite database holding chat threads (+ their search embeddings).
 DB_PATH = Path(os.getenv("PDF_QA_DB", str(DATA_DIR / "threads.db")))
@@ -45,6 +49,16 @@ def resolve_image(p: str) -> str:
 CUSTOM_SYSTEM_PROMPT = os.getenv("PDF_QA_SYSTEM_PROMPT", "").strip()
 
 EMBED_MODEL = os.getenv("EMBED_MODEL", "text-embedding-3-small")  # cheap, 1536-d
+# Which embedder builds AND queries the index (the two must match). "openai" is
+# the default cloud embedder; "local" runs a sentence-transformers model on your
+# machine (fully offline, needs `pip install sentence-transformers`); "hash" is a
+# dependency-free deterministic bag-of-words embedder that needs no model or
+# network at all — lower quality, but makes the app work fully offline out of the
+# box. Whatever built the index must also query it; the identity is recorded in
+# index/embedder.json and checked at startup.
+EMBED_PROVIDER = os.getenv("EMBED_PROVIDER", "openai").strip().lower()
+LOCAL_EMBED_MODEL = os.getenv("LOCAL_EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+HASH_EMBED_DIM = int(os.getenv("HASH_EMBED_DIM", "1024"))
 # OpenRouter slug for the same embedder, used as a fallback when no OPENAI_API_KEY
 # is set (OpenRouter now serves an OpenAI-compatible /embeddings endpoint). The
 # index and queries MUST share an embedder, so this should resolve to the same

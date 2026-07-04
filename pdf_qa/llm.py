@@ -124,14 +124,86 @@ def _embed_client():
     )
 
 
-def embed_texts(texts: list[str]) -> np.ndarray:
-    """Embed a list of texts, batching to stay within request limits.
+def embedder_id() -> str:
+    """Stable identity of the active embedder. Recorded when the index is built
+    and checked at query time — the index and queries MUST use the same embedder
+    or search compares vectors from different spaces (or different dimensions)."""
+    p = config.EMBED_PROVIDER
+    if p == "hash":
+        return f"hash:{config.HASH_EMBED_DIM}"
+    if p == "local":
+        return f"local:{config.LOCAL_EMBED_MODEL}"
+    return f"openai:{config.EMBED_MODEL}"
 
-    Batches are independent network calls, so when there's more than one and
+
+# ---- local (sentence-transformers) embedder ---------------------------------
+_ST_MODEL = None
+
+
+def _embed_local(texts: list[str]) -> np.ndarray:
+    """Embed with a local sentence-transformers model — fully offline, no API key.
+    The model is loaded once and cached. sentence-transformers is an optional
+    dependency (it pulls in torch), so import failure gives an actionable error."""
+    global _ST_MODEL
+    try:
+        from sentence_transformers import SentenceTransformer
+    except Exception as e:  # noqa: BLE001
+        raise RuntimeError(
+            "EMBED_PROVIDER=local needs sentence-transformers. Install it "
+            "(pip install sentence-transformers), or use EMBED_PROVIDER=hash for a "
+            "dependency-free offline embedder, or EMBED_PROVIDER=openai."
+        ) from e
+    if _ST_MODEL is None:
+        _ST_MODEL = SentenceTransformer(config.LOCAL_EMBED_MODEL)
+    if not texts:
+        return np.zeros((0, 0), dtype=np.float32)
+    vecs = _ST_MODEL.encode(list(texts), convert_to_numpy=True, show_progress_bar=False)
+    return np.asarray(vecs, dtype=np.float32)
+
+
+# ---- dependency-free hashing embedder ---------------------------------------
+_HASH_TOKEN = __import__("re").compile(r"[a-z0-9]+")
+
+
+def _embed_hash(texts: list[str]) -> np.ndarray:
+    """A deterministic bag-of-words embedding via the hashing trick: each token
+    (and adjacent bigram, for a little word-order signal) is hashed to a bucket
+    with a signed contribution. No model, no network, no dependency beyond numpy —
+    so the app can build and query an index completely offline. Lower quality than
+    a real embedder, but a working fully-local fallback."""
+    import hashlib
+    dim = max(64, config.HASH_EMBED_DIM)
+    out = np.zeros((len(texts), dim), dtype=np.float32)
+
+    def _bucket(tok: str) -> tuple[int, float]:
+        h = int.from_bytes(hashlib.md5(tok.encode()).digest()[:8], "big")
+        return h % dim, (1.0 if (h >> 7) & 1 else -1.0)
+
+    for i, t in enumerate(texts):
+        toks = _HASH_TOKEN.findall((t or "").lower())
+        prev = None
+        for w in toks:
+            idx, sign = _bucket(w)
+            out[i, idx] += sign
+            if prev is not None:
+                bidx, bsign = _bucket(prev + "_" + w)
+                out[i, bidx] += bsign * 0.5
+            prev = w
+    return out
+
+
+def embed_texts(texts: list[str]) -> np.ndarray:
+    """Embed a list of texts using the configured provider (openai / local / hash).
+
+    OpenAI batches are independent network calls, so when there's more than one and
     EMBED_WORKERS > 1 they're sent concurrently (the OpenAI/httpx client is
     safe to share across threads). Results are reassembled in input order, so
     the returned matrix lines up with `texts` exactly as the serial path did.
     """
+    if config.EMBED_PROVIDER == "hash":
+        return _embed_hash(texts)
+    if config.EMBED_PROVIDER == "local":
+        return _embed_local(texts)
     client, model = _embed_client()
     batches = [texts[i : i + config.EMBED_BATCH]
                for i in range(0, len(texts), config.EMBED_BATCH)]

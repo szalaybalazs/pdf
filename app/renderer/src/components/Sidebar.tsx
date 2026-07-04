@@ -307,7 +307,7 @@ export function Sidebar() {
         ))}
       </ul>
 
-      {store.collections.length > 1 && (
+      {store.collections.length >= 1 && (
         <div className="mt-3 flex items-center gap-1 px-1 pt-2" title="Active library">
           <select
             className="h-[28px] min-w-0 flex-1 rounded-md border border-border bg-bg px-1.5 text-[13px] text-muted"
@@ -328,10 +328,12 @@ export function Sidebar() {
           {store.activeCollection !== "default" && (
             <button
               className="flex h-[28px] w-[28px] items-center justify-center rounded-md text-faint transition hover:bg-bg hover:text-muted"
-              title="Delete a library"
+              title={`Delete the “${store.activeCollection}” library`}
               onClick={() => {
-                const n = window.prompt("Delete which library? (not the active one)");
-                if (n) deleteCollection(n);
+                const name = store.activeCollection;
+                if (window.confirm(`Delete the “${name}” library and its index? Switches back to Default.`)) {
+                  void deleteCollection(name);   // main switches to Default + respawns atomically
+                }
               }}
             >−</button>
           )}

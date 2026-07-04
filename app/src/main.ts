@@ -180,6 +180,14 @@ function collectionIndexDir(name: string): string {
     : path.join(dataDir(), "index");
 }
 
+// The index directory for whichever collection is currently active. Everything
+// that touches the on-disk index (opening a page, clearing the index) must use
+// this rather than a hardcoded dataDir()/index, or it silently targets the
+// default collection after a switch.
+function activeIndexDir(): string {
+  return collectionIndexDir(getActiveCollection());
+}
+
 function cleanupTempThreadIndexes(): void {
   try {
     fs.rmSync(path.join(dataDir(), "temp-threads"), { recursive: true, force: true });
@@ -262,7 +270,7 @@ function resolveDocTarget(name: string): string | null {
   const known = readDocPaths()[name];
   if (known && fs.existsSync(known)) return known;
   const safe = name.replace(/\.pdf$/i, "").replace(/ /g, "_");
-  const firstPage = path.join(dataDir(), "index", "pages", safe, "p0001.png");
+  const firstPage = path.join(activeIndexDir(), "pages", safe, "p0001.png");
   if (fs.existsSync(firstPage)) return firstPage;
   return known || null;   // last resort: the remembered path even if missing
 }
@@ -695,6 +703,80 @@ function readImageAction(filePath: string): string {
   }
 }
 
+// Collections are a main-process concern: they're directories on disk plus which
+// one the backend was spawned to serve. Owning list/create/delete here (rather
+// than round-tripping the Python backend) keeps create/delete atomic with the
+// active-collection switch and its respawn — no cross-process timing races.
+function collectionsRootDir(): string {
+  return path.join(dataDir(), "collections");
+}
+
+function sanitizeCollectionName(name: string): string {
+  return (name || "").replace(/[^A-Za-z0-9 _-]/g, "").trim().slice(0, 64);
+}
+
+function docCountForIndex(indexDir: string): number {
+  try {
+    const m = JSON.parse(fs.readFileSync(path.join(indexDir, "manifest.json"), "utf-8"));
+    return Object.keys(m).filter((k) => !k.startsWith("_")).length;
+  } catch { /* no manifest — fall through */ }
+  try {
+    const docs = new Set<string>();
+    for (const line of fs.readFileSync(path.join(indexDir, "store.jsonl"), "utf-8").split("\n")) {
+      if (!line.trim()) continue;
+      try { docs.add(JSON.parse(line).doc); } catch { /* skip bad line */ }
+    }
+    docs.delete(undefined as unknown as string);
+    return docs.size;
+  } catch { return 0; }
+}
+
+function listCollectionsAction(): { name: string; docs: number; active: boolean }[] {
+  const active = getActiveCollection();
+  const names = ["default"];
+  try {
+    for (const d of fs.readdirSync(collectionsRootDir(), { withFileTypes: true })) {
+      if (d.isDirectory() && d.name !== "default") names.push(d.name);
+    }
+  } catch { /* no collections dir yet */ }
+  return names.map((n) => ({ name: n, docs: docCountForIndex(collectionIndexDir(n)), active: n === active }));
+}
+
+function createCollectionAction(name: string): { ok: boolean; name?: string; error?: string } {
+  const clean = sanitizeCollectionName(name);
+  if (!clean || clean.toLowerCase() === "default") return { ok: false, error: "Invalid library name." };
+  const dir = path.join(collectionsRootDir(), clean);
+  if (fs.existsSync(dir)) return { ok: false, error: "A library with that name already exists." };
+  try {
+    fs.mkdirSync(path.join(dir, "index"), { recursive: true });
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+  log("info", `created collection ${clean}`);
+  track("collection_created");
+  setActiveCollectionFile(clean);   // drop straight into the new (empty) library
+  restartBackend();
+  return { ok: true, name: clean };
+}
+
+function deleteCollectionAction(name: string): { ok: boolean; error?: string } {
+  const clean = sanitizeCollectionName(name);
+  if (clean.toLowerCase() === "default") return { ok: false, error: "The Default library can't be deleted." };
+  const dir = path.join(collectionsRootDir(), clean);
+  if (!fs.existsSync(dir)) return { ok: false, error: "No such library." };
+  const wasActive = clean === getActiveCollection();
+  if (wasActive) setActiveCollectionFile("default");   // can't serve a deleted library
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+  log("info", `deleted collection ${clean}${wasActive ? " (was active -> default)" : ""}`);
+  track("collection_deleted");
+  if (wasActive) restartBackend();
+  return { ok: true };
+}
+
 // Switch the active collection: persist the choice and respawn the backend so it
 // loads that collection's index. Returns the collection now active.
 function setCollectionAction(name: string): string {
@@ -768,7 +850,7 @@ async function clearFileIndexAction(): Promise<void> {
     return;
   }
 
-  const indexDir = path.join(dataDir(), "index");
+  const indexDir = activeIndexDir();
   log("info", `clear-file-index ${indexDir}`);
   try {
     fs.rmSync(indexDir, { recursive: true, force: true });
@@ -1179,6 +1261,9 @@ const routerDeps: RouterDeps = {
   showThreadMenu: showThreadMenuAction,
   showModelMenu: showModelMenuAction,
   setCollection: setCollectionAction,
+  listCollections: listCollectionsAction,
+  createCollection: createCollectionAction,
+  deleteCollection: deleteCollectionAction,
   readImage: readImageAction,
   getUpdateState,
   installUpdate: installUpdateAction,

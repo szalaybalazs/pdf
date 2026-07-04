@@ -408,24 +408,48 @@ export function showDocMenu(name: string): void {
 }
 
 // ---- collections (libraries) ------------------------------------------------
+// Collections are owned by the main process (directories + which one the backend
+// serves), so list/create/delete are direct tRPC calls, not backend events.
+export async function refreshCollections(): Promise<void> {
+  try {
+    store.collections = await api.listCollections();
+    const active = store.collections.find((c) => c.active);
+    if (active) store.activeCollection = active.name;
+    bump();
+  } catch (e) {
+    console.error("[collections] list", e);
+  }
+}
+
 export function switchCollection(name: string): void {
   if (!name || name === store.activeCollection) return;
-  store.status = `switching to ${name}…`;
+  store.status = `switching to ${name === "default" ? "Default library" : name}…`;
   store.ready = false;
   bump();
   // Respawns the backend with the new collection; a fresh `ready` event follows.
   void api.setCollection(name);
 }
 
-export function createCollection(name: string): void {
+export async function createCollection(name: string): Promise<void> {
   const clean = name.trim();
-  if (clean) api.sendRequest({ type: "collection_create", name: clean });
+  if (!clean) return;
+  const res = await api.createCollection(clean);
+  if (!res.ok) {
+    store.status = res.error || "Could not create library."; store.statusErr = true; bump();
+    return;
+  }
+  // On success the backend respawns into the new (empty) library; show the
+  // switching state until the fresh `ready` arrives.
+  store.status = `opening ${res.name}…`; store.statusErr = false; store.ready = false; bump();
 }
 
-export function deleteCollection(name: string): void {
-  if (name && name !== "default" && name !== store.activeCollection) {
-    api.sendRequest({ type: "collection_delete", name });
-  }
+export async function deleteCollection(name: string): Promise<void> {
+  if (!name || name === "default") return;
+  const res = await api.deleteCollection(name);
+  if (!res.ok) { store.status = res.error || "Could not delete library."; store.statusErr = true; bump(); }
+  // If the deleted library was active the backend respawns (ready refreshes);
+  // otherwise refresh the list in place.
+  if (store.ready) void refreshCollections();
 }
 
 export function showThreadMenu(id: string): void {
@@ -544,14 +568,7 @@ export function handleServeEvent(ev: ServeEvent): void {
       t.disabledDocs = (t.disabledDocs || []).filter((d) => r.docs.includes(d));
     }
     store.ready = true;
-    api.sendRequest({ type: "collections" });   // refresh the library list
-    bump();
-    return;
-  }
-  if (ev.type === "collections" || ev.type === "collection_result") {
-    const e = ev as unknown as { collections?: Collection[]; active?: string };
-    if (e.collections) store.collections = e.collections;
-    if (e.active) store.activeCollection = e.active;
+    void refreshCollections();   // pull the library list from the main process
     bump();
     return;
   }

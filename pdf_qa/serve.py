@@ -202,7 +202,7 @@ def _confidence_level(top_sim: float) -> str:
 
 def handle_query(store: VectorStore | None, req: dict) -> None:
     from .llm import (answer_stream, embed_query, split_thinking,
-                      extract_inline_tool_calls, LOW_CONFIDENCE_NOTE)
+                      extract_inline_tool_calls, rewrite_query, LOW_CONFIDENCE_NOTE)
 
     rid = req.get("reqId")
     question = req["question"]
@@ -236,9 +236,21 @@ def handle_query(store: VectorStore | None, req: dict) -> None:
               "detail": detail, "debug": debug_lines if debug else [],
               "duration": round(time.time() - t0, 3)})
 
+    # 0) query rewrite — on a follow-up, resolve references into a standalone
+    # search query. Retrieval (embed + BM25 + rerank) uses this; the answerer
+    # still gets the ORIGINAL question and full history.
+    search_query = question
+    if history and config.QUERY_REWRITE:
+        t0 = time.time()
+        rewritten = rewrite_query(question, history)
+        if rewritten and rewritten.strip() != question.strip():
+            search_query = rewritten
+            tool("rewrite_query", f"model={config.REWRITE_MODEL}",
+                 [f"“{question[:60]}” → “{search_query[:80]}”"], [], t0)
+
     # 1) embed
     t0 = time.time()
-    qvec = embed_query(question)
+    qvec = embed_query(search_query)
     tool("embed_query", f"model={config.EMBED_MODEL}",
          [f"1 vector · dim {len(qvec)}"], [], t0)
 
@@ -247,7 +259,7 @@ def handle_query(store: VectorStore | None, req: dict) -> None:
     # (2b) rerank that pool down to TOP_K.
     t0 = time.time()
     pool_k = max(config.TOP_K, config.RERANK_CANDIDATES) if config.RERANK_ENABLED else config.TOP_K
-    pool, dense, n_sparse = _retrieve_pool(stores, question, qvec, pool_k, doc_filter)
+    pool, dense, n_sparse = _retrieve_pool(stores, search_query, qvec, pool_k, doc_filter)
     top_sim = dense[0][1] if dense else 0.0   # best cosine — retrieval-confidence signal
     dbg = [f"{s:0.4f}  {c.doc}  p.{c.page}  {' '.join(c.text.split())[:60]}"
            for c, s in pool[:config.TOP_K]]
@@ -258,7 +270,7 @@ def handle_query(store: VectorStore | None, req: dict) -> None:
          [f"{len(pool)} candidate(s) from {len({c.doc for c, _ in pool})} doc(s)"], dbg, t0)
 
     # 2b) rerank the candidate pool to the final TOP_K passages
-    hits = _rerank_pool(question, pool, config.TOP_K, tool, debug)
+    hits = _rerank_pool(search_query, pool, config.TOP_K, tool, debug)
     docs = {c.doc for c, _ in hits}
 
     # Retrieval confidence: a weak best match means the documents probably don't

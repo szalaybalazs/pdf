@@ -281,6 +281,44 @@ def rerank_indices(query: str, passages: list[str], top_k: int) -> list[int] | N
     return order[:top_k]
 
 
+_REWRITE_SYSTEM = (
+    "You rewrite a follow-up question into a STANDALONE search query for a document "
+    "retrieval system. Resolve pronouns and implicit references ('it', 'that stage', "
+    "'the same tube') using the conversation so the query makes sense on its own. "
+    "Keep it concise and keyword-rich. Reply with ONLY the rewritten query — no "
+    "quotes, no preamble, no explanation."
+)
+
+
+def rewrite_query(question: str, history: list[dict] | None) -> str:
+    """Rewrite a follow-up into a standalone retrieval query using the recent
+    conversation. Returns the original question unchanged when there's no history
+    or on any failure (retrieval must never be blocked by the rewriter)."""
+    if not history:
+        return question
+    client, model = _rerank_client()   # same cheap client policy as the reranker
+    convo = "\n".join(
+        f"{h.get('role', '?')}: {str(h.get('content', ''))[:500]}" for h in history[-4:]
+    )
+    kw: dict = {
+        "model": model, "max_tokens": 80,
+        "messages": [
+            {"role": "system", "content": _REWRITE_SYSTEM},
+            {"role": "user", "content":
+                f"Conversation so far:\n{convo}\n\nFollow-up question: {question}\n\n"
+                f"Standalone search query:"},
+        ],
+    }
+    if not _omits_temperature(model):
+        kw["temperature"] = 0
+    try:
+        resp = client.chat.completions.create(**kw)
+        out = (resp.choices[0].message.content or "").strip().strip('"').strip()
+        return out or question
+    except Exception:
+        return question
+
+
 def _image_jpeg_b64(path: str, max_dim: int) -> str:
     """Load a page PNG, downscale to max_dim, return base64-encoded JPEG bytes."""
     img = Image.open(path).convert("RGB")

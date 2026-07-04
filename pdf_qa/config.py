@@ -331,6 +331,15 @@ RERANK_ENABLED = _bool_env("RERANK_ENABLED", True)
 RERANK_CANDIDATES = int(os.getenv("RERANK_CANDIDATES", "30"))  # pool size before rerank
 RERANK_MODEL = os.getenv("RERANK_MODEL", SUMMARY_MODEL)        # cheap listwise reranker
 
+# --- Query rewriting ---------------------------------------------------------
+# On a follow-up ("what about its bias?"), the raw question embeds poorly because
+# it depends on the earlier turns. A cheap model rewrites it into a standalone,
+# keyword-rich search query (pronouns resolved) used for retrieval only — the
+# answerer still gets the original question and full history. Set
+# QUERY_REWRITE=false to embed the question verbatim.
+QUERY_REWRITE = _bool_env("QUERY_REWRITE", True)
+REWRITE_MODEL = os.getenv("REWRITE_MODEL", SUMMARY_MODEL)
+
 # --- Hybrid search -----------------------------------------------------------
 # Fuse dense (embedding cosine) and sparse (BM25 lexical) retrieval with
 # Reciprocal Rank Fusion. Cosine alone misses exact terms — part numbers,

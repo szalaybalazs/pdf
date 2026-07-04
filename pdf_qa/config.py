@@ -20,9 +20,23 @@ PDF_DIR = Path(os.getenv("PDF_DIR", str(Path.home() / "Downloads" / "Proba")))
 # folder so nothing changes when you run ingest/ask without the desktop shell.
 DATA_DIR = Path(os.getenv("PDF_QA_DATA_DIR", str(Path(__file__).resolve().parent.parent)))
 
+# Collections = independent libraries you switch between, each with its own index.
+# The "default" collection keeps the historical layout (index right under DATA_DIR);
+# a named collection lives under DATA_DIR/collections/<name>/index. The active
+# collection is selected per backend process via PDF_QA_COLLECTION (the desktop app
+# respawns the backend to switch). INDEX_DIR, if set explicitly, still wins.
+COLLECTIONS_DIR = Path(os.getenv("PDF_QA_COLLECTIONS_DIR", str(DATA_DIR / "collections")))
+ACTIVE_COLLECTION = os.getenv("PDF_QA_COLLECTION", "").strip() or "default"
+
+
+def _collection_base() -> Path:
+    if ACTIVE_COLLECTION.lower() != "default":
+        return COLLECTIONS_DIR / ACTIVE_COLLECTION
+    return DATA_DIR
+
 # Where the index (page images + embeddings + metadata) is written. Defaults under
-# DATA_DIR; still overridable directly with INDEX_DIR.
-INDEX_DIR = Path(os.getenv("INDEX_DIR", str(DATA_DIR / "index")))
+# the active collection's base; still overridable directly with INDEX_DIR.
+INDEX_DIR = Path(os.getenv("INDEX_DIR", str(_collection_base() / "index")))
 PAGES_DIR = INDEX_DIR / "pages"          # rendered page PNGs
 STORE_PATH = INDEX_DIR / "store"         # vector store prefix (.npy + .jsonl)
 # Content-hash manifest: doc filename -> {hash, size, mtime, ...}. Lets ingest

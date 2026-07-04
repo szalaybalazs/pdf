@@ -26,6 +26,7 @@ export const api = {
     trpc.showThreadMenu.mutate({ title, messages, markdown, filename }),
   showModelMenu: (models: { id: string; label: string; provider?: string; model?: string; via_openrouter?: boolean }[], selectedModel: string) =>
     trpc.showModelMenu.mutate({ models, selectedModel }),
+  setCollection: (name: string) => trpc.setCollection.mutate(name),
   getSettings: () => trpc.getSettings.query(),
   setSettings: (s: {
     openaiKey: string; anthropicKey: string; openrouterKey: string; systemPrompt: string;

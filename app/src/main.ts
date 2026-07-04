@@ -148,6 +148,38 @@ function dataDir(): string {
   return app.getPath("userData");
 }
 
+// The active collection (independent library) is persisted here and applied to
+// the backend env on spawn. Switching collections respawns the backend, matching
+// how settings changes are applied.
+function activeCollectionPath(): string {
+  return path.join(dataDir(), "active-collection.txt");
+}
+
+function getActiveCollection(): string {
+  try {
+    const v = fs.readFileSync(activeCollectionPath(), "utf-8").trim();
+    return v || "default";
+  } catch {
+    return "default";
+  }
+}
+
+function setActiveCollectionFile(name: string): void {
+  try {
+    fs.writeFileSync(activeCollectionPath(), (name || "default").trim());
+  } catch (e) {
+    log("warn", "could not persist active collection", (e as Error).message);
+  }
+}
+
+// Directory holding a collection's index. "default" keeps the historical layout
+// (index directly under DATA_DIR); named collections nest under collections/<name>.
+function collectionIndexDir(name: string): string {
+  return name && name.toLowerCase() !== "default"
+    ? path.join(dataDir(), "collections", name, "index")
+    : path.join(dataDir(), "index");
+}
+
 function cleanupTempThreadIndexes(): void {
   try {
     fs.rmSync(path.join(dataDir(), "temp-threads"), { recursive: true, force: true });
@@ -253,13 +285,15 @@ function emitLog(line: string): void { bus.emit("serve-log", line); }
 
 function backendEnv(): NodeJS.ProcessEnv {
   const DATA_DIR = dataDir();
-  const INDEX_DIR = path.join(DATA_DIR, "index");
+  const collection = getActiveCollection();
+  const INDEX_DIR = collectionIndexDir(collection);
   fs.mkdirSync(INDEX_DIR, { recursive: true });
   const settings = readSettings();
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     PDF_QA_DATA_DIR: DATA_DIR,
     INDEX_DIR,
+    PDF_QA_COLLECTION: collection,
   };
   // Keys set in the settings page take precedence over any inherited / .env value.
   if (settings.openaiKey) env.OPENAI_API_KEY = settings.openaiKey;
@@ -642,6 +676,18 @@ function restartBackend(): void {
     serve.kill();
   }
   startBackend();
+}
+
+// Switch the active collection: persist the choice and respawn the backend so it
+// loads that collection's index. Returns the collection now active.
+function setCollectionAction(name: string): string {
+  const target = (name || "default").trim() || "default";
+  if (target === getActiveCollection()) return target;
+  setActiveCollectionFile(target);
+  log("info", `switching collection -> ${target}`);
+  track("collection_switched");
+  restartBackend();
+  return target;
 }
 
 // --- backend actions (exposed to the renderer through the tRPC router) -------
@@ -1115,6 +1161,7 @@ const routerDeps: RouterDeps = {
   showDocMenu: showDocMenuAction,
   showThreadMenu: showThreadMenuAction,
   showModelMenu: showModelMenuAction,
+  setCollection: setCollectionAction,
   getUpdateState,
   installUpdate: installUpdateAction,
   track: trackFromRenderer,

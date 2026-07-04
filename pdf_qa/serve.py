@@ -67,7 +67,8 @@ def _index_stats(store: VectorStore | None) -> dict:
               for mid, spec in config.MODELS.items()]
     return {"docs": docs, "chunks": len(store) if store else 0,
             "vision_model": config.VISION_MODEL, "embed_model": config.EMBED_MODEL,
-            "models": models, "default_model": config.DEFAULT_MODEL}
+            "models": models, "default_model": config.DEFAULT_MODEL,
+            "collection": config.ACTIVE_COLLECTION}
 
 
 def _thread_stores(store: VectorStore | None, req: dict) -> list[VectorStore]:
@@ -671,6 +672,20 @@ def main(argv=None) -> int:
             except Exception as e:  # noqa: BLE001
                 capture_exception(e)
                 emit({"type": "error", "reqId": req.get("reqId"), "message": f"temp index failed: {e}"})
+        elif kind == "collections":
+            from . import collections
+            emit({"type": "collections", "collections": collections.list_collections(),
+                  "active": config.ACTIVE_COLLECTION})
+        elif kind == "collection_create":
+            from . import collections
+            res = collections.create_collection(req.get("name") or "")
+            emit({"type": "collection_result", "action": "create", **res,
+                  "collections": collections.list_collections(), "active": config.ACTIVE_COLLECTION})
+        elif kind == "collection_delete":
+            from . import collections
+            res = collections.delete_collection(req.get("name") or "")
+            emit({"type": "collection_result", "action": "delete", **res,
+                  "collections": collections.list_collections(), "active": config.ACTIVE_COLLECTION})
         elif kind == "highlight":
             # Produce a page image with the cited passage highlighted; the UI opens
             # the returned path (or falls back to the plain page image on null).

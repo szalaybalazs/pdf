@@ -4,6 +4,7 @@ import {
   setSearchQuery, addPdfs, openDoc, showDocMenu, openSettings,
   docEnabled, enabledDocs, setAllDocsEnabled, setDocEnabled, threadDocs,
   installUpdate, showThreadMenu, ingestFiles,
+  switchCollection, createCollection, deleteCollection,
 } from "../store";
 import type { Thread } from "../types";
 import { SEP } from "../platform";
@@ -305,6 +306,37 @@ export function Sidebar() {
           </React.Fragment>
         ))}
       </ul>
+
+      {store.collections.length > 1 && (
+        <div className="mt-3 flex items-center gap-1 px-1 pt-2" title="Active library">
+          <select
+            className="h-[28px] min-w-0 flex-1 rounded-md border border-border bg-bg px-1.5 text-[13px] text-muted"
+            value={store.activeCollection}
+            onChange={(e) => switchCollection(e.target.value)}
+          >
+            {store.collections.map((c) => (
+              <option key={c.name} value={c.name}>
+                {c.name === "default" ? "Default library" : c.name} ({c.docs})
+              </option>
+            ))}
+          </select>
+          <button
+            className="flex h-[28px] w-[28px] items-center justify-center rounded-md text-faint transition hover:bg-bg hover:text-muted"
+            title="New library"
+            onClick={() => { const n = window.prompt("New library name"); if (n) createCollection(n); }}
+          >+</button>
+          {store.activeCollection !== "default" && (
+            <button
+              className="flex h-[28px] w-[28px] items-center justify-center rounded-md text-faint transition hover:bg-bg hover:text-muted"
+              title="Delete a library"
+              onClick={() => {
+                const n = window.prompt("Delete which library? (not the active one)");
+                if (n) deleteCollection(n);
+              }}
+            >−</button>
+          )}
+        </div>
+      )}
 
       <div className="mt-3 flex items-center gap-1 px-1 pb-1 pt-2">
         <button

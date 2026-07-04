@@ -14,7 +14,7 @@ import type {
   Thread, AssistantMsg, ModelOption, Source, Usage,
   ServeEvent, ReadyEvent, BackendError, ThreadsEvent,
   ThreadTitleEvent, ThreadResultsEvent, ThreadResult, ToolEvent, AnswerEvent, DeltaEvent,
-  HighlightedEvent,
+  HighlightedEvent, Collection,
 } from "./types";
 
 // ---- subscription plumbing -------------------------------------------------
@@ -71,6 +71,8 @@ interface State {
   settingsOpen: boolean;
   ready: boolean;
   update: UpdateState | null;   // auto-update state; drives the sidebar restart indicator
+  collections: Collection[];    // known libraries (default + named)
+  activeCollection: string;     // which collection the backend is currently serving
 }
 
 export const store: State = {
@@ -91,6 +93,8 @@ export const store: State = {
   settingsOpen: false,
   ready: false,
   update: null,
+  collections: [],
+  activeCollection: "default",
 };
 
 const reqToThread = new Map<string, string>();
@@ -378,6 +382,27 @@ export function showDocMenu(name: string): void {
   void api.showDocMenu(name);   // native Electron menu; Open / Remove handled in main
 }
 
+// ---- collections (libraries) ------------------------------------------------
+export function switchCollection(name: string): void {
+  if (!name || name === store.activeCollection) return;
+  store.status = `switching to ${name}…`;
+  store.ready = false;
+  bump();
+  // Respawns the backend with the new collection; a fresh `ready` event follows.
+  void api.setCollection(name);
+}
+
+export function createCollection(name: string): void {
+  const clean = name.trim();
+  if (clean) api.sendRequest({ type: "collection_create", name: clean });
+}
+
+export function deleteCollection(name: string): void {
+  if (name && name !== "default" && name !== store.activeCollection) {
+    api.sendRequest({ type: "collection_delete", name });
+  }
+}
+
 export function showThreadMenu(id: string): void {
   const t = store.threads.find((thread) => thread.id === id);
   if (!t) return;
@@ -487,10 +512,21 @@ export function handleServeEvent(ev: ServeEvent): void {
     store.statusErr = false;
     store.status = `${r.chunks} chunks${SEP}${r.docs.length} document(s)`;
     store.docs = r.docs;
+    if ((r as { collection?: string }).collection) {
+      store.activeCollection = (r as { collection?: string }).collection as string;
+    }
     for (const t of store.threads) {
       t.disabledDocs = (t.disabledDocs || []).filter((d) => r.docs.includes(d));
     }
     store.ready = true;
+    api.sendRequest({ type: "collections" });   // refresh the library list
+    bump();
+    return;
+  }
+  if (ev.type === "collections" || ev.type === "collection_result") {
+    const e = ev as unknown as { collections?: Collection[]; active?: string };
+    if (e.collections) store.collections = e.collections;
+    if (e.active) store.activeCollection = e.active;
     bump();
     return;
   }

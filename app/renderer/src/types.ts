@@ -23,8 +23,10 @@ export interface DeltaEvent { type: "delta"; reqId?: string; text: string; }
 export interface ModelOption { id: string; label: string; provider?: string; model?: string; via_openrouter?: boolean; }
 export interface ReadyEvent {
   type: "ready"; docs: string[]; chunks: number; vision_model: string; embed_model: string;
-  models?: ModelOption[]; default_model?: string;
+  models?: ModelOption[]; default_model?: string; collection?: string;
 }
+export interface Collection { name: string; docs: number; active: boolean; }
+export interface CollectionsEvent { type: "collections"; collections: Collection[]; active: string; }
 export interface BackendError { type: "error"; reqId?: string; message: string; }
 export interface ThreadsEvent { type: "threads"; threads: Thread[]; }
 export interface ThreadTitleEvent { type: "thread_title"; id: string; title: string; }

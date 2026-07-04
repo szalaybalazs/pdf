@@ -686,6 +686,26 @@ def main(argv=None) -> int:
             res = collections.delete_collection(req.get("name") or "")
             emit({"type": "collection_result", "action": "delete", **res,
                   "collections": collections.list_collections(), "active": config.ACTIVE_COLLECTION})
+        elif kind == "page_image":
+            # Resolve a rendered page image (by PDF page index) for the in-app
+            # viewer's page navigation, with its printed label. path=null if the
+            # page was never rendered (out of range).
+            doc = str(req.get("doc") or "")
+            try:
+                page = int(req.get("page") or 0)
+            except Exception:
+                page = 0
+            safe = os.path.splitext(doc)[0].replace(" ", "_")
+            img = config.PAGES_DIR / safe / f"p{page:04d}.png"
+            label = str(page)
+            if store is not None:
+                for c in store.chunks:
+                    if c.doc == doc and c.page == page:
+                        label = c.page_label or str(page)
+                        break
+            emit({"type": "page_image", "reqId": req.get("reqId"), "doc": doc,
+                  "page": page, "label": label,
+                  "path": str(img) if img.exists() else None})
         elif kind == "highlight":
             # Produce a page image with the cited passage highlighted; the UI opens
             # the returned path (or falls back to the plain page image on null).

@@ -4,6 +4,7 @@ import { Sidebar } from "./components/Sidebar";
 import { Chat } from "./components/Chat";
 import { Inspector } from "./components/Inspector";
 import { Settings } from "./components/Settings";
+import { Viewer } from "./components/Viewer";
 import { APP_NAME } from "../../src/branding";
 import { IS_MAC } from "./platform";
 
@@ -98,6 +99,7 @@ export function App() {
         </div>
       </div>
       {store.settingsOpen && <Settings />}
+      <Viewer />
     </div>
   );
 }

@@ -49,6 +49,7 @@ export interface RouterDeps {
   showThreadMenu: (input: { title: string; messages: unknown[]; markdown: string; filename: string }) => Promise<void>;
   showModelMenu: (input: { models: ModelMenuItem[]; selectedModel: string }) => Promise<string | null>;
   setCollection: (name: string) => string;   // switch active collection (respawns backend)
+  readImage: (filePath: string) => string;    // page image -> data URL (guarded to dataDir)
   getUpdateState: () => UpdateState | null;   // current update state for late subscribers
   installUpdate: () => boolean;               // quit + install; false = dev no-op
   track: (event: string, props?: Record<string, string | number | boolean>) => void;  // renderer-originated analytics
@@ -109,6 +110,7 @@ export function createAppRouter(deps: RouterDeps) {
       selectedModel: z.string(),
     })).mutation(({ input }) => deps.showModelMenu(input)),
     setCollection: t.procedure.input(z.string()).mutation(({ input }) => deps.setCollection(input)),
+    readImage: t.procedure.input(z.string()).query(({ input }) => deps.readImage(input)),
     installUpdate: t.procedure.mutation(() => deps.installUpdate()),
     track: t.procedure.input(z.object({
       event: z.string(),

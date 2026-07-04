@@ -26,6 +26,9 @@ export interface ReadyEvent {
   models?: ModelOption[]; default_model?: string; collection?: string;
 }
 export interface Collection { name: string; docs: number; active: boolean; }
+export interface PageImageEvent { type: "page_image"; reqId?: string; doc: string; page: number; label: string; path: string | null; }
+// In-app page viewer: which page is shown and its (data-URL) image.
+export interface ViewerState { doc: string; page: number; label: string; imageUrl: string; loading: boolean; }
 export interface CollectionsEvent { type: "collections"; collections: Collection[]; active: string; }
 export interface BackendError { type: "error"; reqId?: string; message: string; }
 export interface ThreadsEvent { type: "threads"; threads: Thread[]; }

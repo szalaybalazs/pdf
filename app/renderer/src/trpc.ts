@@ -27,6 +27,7 @@ export const api = {
   showModelMenu: (models: { id: string; label: string; provider?: string; model?: string; via_openrouter?: boolean }[], selectedModel: string) =>
     trpc.showModelMenu.mutate({ models, selectedModel }),
   setCollection: (name: string) => trpc.setCollection.mutate(name),
+  readImage: (filePath: string): Promise<string> => trpc.readImage.query(filePath),
   getSettings: () => trpc.getSettings.query(),
   setSettings: (s: {
     openaiKey: string; anthropicKey: string; openrouterKey: string; systemPrompt: string;

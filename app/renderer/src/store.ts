@@ -14,7 +14,7 @@ import type {
   Thread, AssistantMsg, ModelOption, Source, Usage,
   ServeEvent, ReadyEvent, BackendError, ThreadsEvent,
   ThreadTitleEvent, ThreadResultsEvent, ThreadResult, ToolEvent, AnswerEvent, DeltaEvent,
-  HighlightedEvent, Collection,
+  HighlightedEvent, Collection, ViewerState,
 } from "./types";
 
 // ---- subscription plumbing -------------------------------------------------
@@ -73,6 +73,7 @@ interface State {
   update: UpdateState | null;   // auto-update state; drives the sidebar restart indicator
   collections: Collection[];    // known libraries (default + named)
   activeCollection: string;     // which collection the backend is currently serving
+  viewer: ViewerState | null;   // in-app page viewer (null = closed)
 }
 
 export const store: State = {
@@ -95,6 +96,7 @@ export const store: State = {
   update: null,
   collections: [],
   activeCollection: "default",
+  viewer: null,
 };
 
 const reqToThread = new Map<string, string>();
@@ -243,27 +245,50 @@ export async function addTempPdfsToThread(filePaths: string[]): Promise<void> {
   }
 }
 
-// ---- citation click: open the cited page, highlighted -----------------------
-// A citation click asks the backend to render the page with the cited passage
-// highlighted, then opens that. Requests are correlated by a "hl-" reqId; the
-// plain image is remembered as a fallback so a highlight miss still opens the
-// page. Keyed by reqId so overlapping clicks don't clobber each other.
+// ---- in-app page viewer -----------------------------------------------------
+// A citation click opens the cited page inside the app: the plain page shows
+// immediately, then the backend's highlighted render (the cited passage boxed)
+// upgrades it, and prev/next flips through pages without leaving the app. Async
+// responses are correlated by a "vw-" reqId so stale ones are ignored; the plain
+// image is remembered as a fallback if highlighting finds nothing.
 const highlightPending = new Map<string, string>();
+let viewerReq = "";
+
+async function loadViewerImage(path: string, reqId: string): Promise<void> {
+  if (!path) { if (store.viewer && reqId === viewerReq) { store.viewer.loading = false; bump(); } return; }
+  const url = await api.readImage(path);
+  if (store.viewer && reqId === viewerReq && url) {
+    store.viewer.imageUrl = url;
+    store.viewer.loading = false;
+    bump();
+  }
+}
 
 export function openCitation(image: string, doc?: string, page?: number,
                              snippet?: string): void {
-  if (!doc || !page) { void api.openFigure(image); return; }   // nothing to locate
-  const reqId = "hl-" + uid();
+  if (!doc || !page) { void api.openFigure(image); return; }   // can't locate — OS viewer
+  store.viewer = { doc, page, label: String(page), imageUrl: "", loading: true };
+  bump();
+  const reqId = "vw-" + uid();
+  viewerReq = reqId;
   highlightPending.set(reqId, image);
+  void loadViewerImage(image, reqId);   // show the plain page right away
   const question = lastUserText(activeThread() || ({} as Thread));
+  // …then upgrade to the highlighted render when it's ready.
   api.sendRequest({ type: "highlight", reqId, doc, page, query: question, snippet: snippet || "" });
-  // Safety net: if the backend never answers, open the plain page after a beat.
-  setTimeout(() => {
-    if (highlightPending.has(reqId)) {
-      highlightPending.delete(reqId);
-      void api.openFigure(image);
-    }
-  }, 4000);
+}
+
+export function closeViewer(): void { store.viewer = null; bump(); }
+
+export function viewerGoto(delta: number): void {
+  if (!store.viewer) return;
+  const page = store.viewer.page + delta;
+  if (page < 1) return;
+  store.viewer.loading = true;
+  bump();
+  const reqId = "vw-" + uid();
+  viewerReq = reqId;
+  api.sendRequest({ type: "page_image", reqId, doc: store.viewer.doc, page });
 }
 
 // ---- sending ---------------------------------------------------------------
@@ -541,8 +566,24 @@ export function handleServeEvent(ev: ServeEvent): void {
     const e = ev as HighlightedEvent;
     const fallback = e.reqId ? highlightPending.get(e.reqId) : undefined;
     if (e.reqId) highlightPending.delete(e.reqId);
-    const path = e.path || fallback;   // open the highlighted render, else the plain page
-    if (path) void api.openFigure(path);
+    // Upgrade the open viewer to the highlighted render (or keep the plain page).
+    if (e.reqId && e.reqId === viewerReq && store.viewer) {
+      void loadViewerImage(e.path || fallback || "", e.reqId);
+    }
+    return;
+  }
+  if (ev.type === "page_image") {
+    const e = ev as unknown as { reqId?: string; page: number; label: string; path: string | null };
+    if (e.reqId && e.reqId === viewerReq && store.viewer) {
+      if (e.path) {
+        store.viewer.page = e.page;
+        store.viewer.label = e.label || String(e.page);
+        void loadViewerImage(e.path, e.reqId);
+      } else {
+        store.viewer.loading = false;   // out of range — nothing to show
+        bump();
+      }
+    }
     return;
   }
   if (ev.type === "threads") { hydrateThreads((ev as ThreadsEvent).threads || []); return; }

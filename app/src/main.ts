@@ -678,6 +678,23 @@ function restartBackend(): void {
   startBackend();
 }
 
+// Read a rendered page image as a data URL for the in-app viewer. Guarded to the
+// user's data directory so the renderer can't read arbitrary files.
+function readImageAction(filePath: string): string {
+  try {
+    const resolved = path.resolve(filePath);
+    if (!resolved.startsWith(path.resolve(dataDir()))) {
+      log("warn", `read-image blocked (outside dataDir): ${resolved}`);
+      return "";
+    }
+    const buf = fs.readFileSync(resolved);
+    return `data:image/png;base64,${buf.toString("base64")}`;
+  } catch (e) {
+    log("warn", "read-image failed", (e as Error).message);
+    return "";
+  }
+}
+
 // Switch the active collection: persist the choice and respawn the backend so it
 // loads that collection's index. Returns the collection now active.
 function setCollectionAction(name: string): string {
@@ -1162,6 +1179,7 @@ const routerDeps: RouterDeps = {
   showThreadMenu: showThreadMenuAction,
   showModelMenu: showModelMenuAction,
   setCollection: setCollectionAction,
+  readImage: readImageAction,
   getUpdateState,
   installUpdate: installUpdateAction,
   track: trackFromRenderer,

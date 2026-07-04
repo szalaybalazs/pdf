@@ -1,0 +1,23 @@
+{
+  "_comment": "Golden retrieval set: each question lists the page(s) that actually answer it. Used by `python -m pdf_qa.eval` to measure recall@k / MRR and to A/B rerank + hybrid search. Pages are PDF page indices (1-based), matching store metadata. Expand this with your own questions — the harness is only as good as the set.",
+  "questions": [
+    {"question": "What are the SI base units (metre, kilogram, second, ampere)?",
+     "expected": [{"doc": "Zoran M. Dukic - High-End Tube Amplifier Design - 2025.pdf", "page": 11}]},
+    {"question": "How is class-A / class-AB push-pull operation described for output stages?",
+     "expected": [{"doc": "Zoran M. Dukic - High-End Tube Amplifier Design - 2025.pdf", "page": 181},
+                  {"doc": "Zoran M. Dukic - High-End Tube Amplifier Design - 2025.pdf", "page": 183}]},
+    {"question": "What value should the grid-leak resistor be in a common-cathode triode stage?",
+     "expected": [{"doc": "Morgan_Jones_Valve_Amplifiers_Third_Edition.pdf", "page": 95},
+                  {"doc": "Morgan_Jones_Valve_Amplifiers_Third_Edition.pdf", "page": 96}]},
+    {"question": "How does cathode bias work and how do I choose the cathode resistor?",
+     "expected": [{"doc": "Morgan_Jones_Valve_Amplifiers_Third_Edition.pdf", "page": 185},
+                  {"doc": "Morgan_Jones_Valve_Amplifiers_Third_Edition.pdf", "page": 187}]},
+    {"question": "What sets the output transformer primary impedance?",
+     "expected": [{"doc": "Zoran M. Dukic - High-End Tube Amplifier Design - 2025.pdf", "page": 208}]},
+    {"question": "How is negative feedback applied around a valve amplifier?",
+     "expected": [{"doc": "Zoran M. Dukic - High-End Tube Amplifier Design - 2025.pdf", "page": 138},
+                  {"doc": "Morgan_Jones_Valve_Amplifiers_Third_Edition.pdf", "page": 161}]},
+    {"question": "How do I use the load line to find plate dissipation and operating point?",
+     "expected": [{"doc": "Zoran M. Dukic - High-End Tube Amplifier Design - 2025.pdf", "page": 157}]}
+  ]
+}

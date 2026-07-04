@@ -46,6 +46,9 @@ class Chunk:
     image_path: str    # path to the rendered page PNG
     kind: str = "text" # "text" (prose) or "table" (extracted table markdown).
                        # Defaulted so metadata written by older builds still loads.
+    page_label: str = ""  # printed page label (e.g. "106", "xiv"); "" = use `page`.
+                          # Books have front matter, so the printed page differs
+                          # from the PDF page index; citations show this label.
 
 
 class VectorStore:

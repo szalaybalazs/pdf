@@ -2,7 +2,9 @@
  *  renderer's in-memory chat model. */
 
 // ---- backend protocol ------------------------------------------------------
-export interface Source { doc: string; page: number; image: string; snippet?: string; }
+export interface Source { doc: string; page: number; image: string; snippet?: string;
+  page_label?: string;  // printed page ("106"/"xiv"); shown in citations, matched on click
+}
 export interface HighlightedEvent { type: "highlighted"; reqId?: string; path: string | null; }
 export interface ToolEvent {
   type: "tool"; reqId?: string; name: string; args: string;

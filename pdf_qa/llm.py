@@ -476,9 +476,15 @@ LOW_CONFIDENCE_NOTE = (
 )
 
 
+def _ctx_page(c) -> str:
+    """Printed page label to show/cite for a context passage, falling back to the
+    PDF page index when the document carries no page labels."""
+    return str(c.get("page_label") or c["page"])
+
+
 def _user_text(question, contexts, history, has_images, note) -> str:
     text_block = "\n\n".join(
-        f"[Passage {i+1}] ({c['doc']} p.{c['page']})\n{c['text']}"
+        f"[Passage {i+1}] ({c['doc']} p.{_ctx_page(c)})\n{c['text']}"
         for i, c in enumerate(contexts)
     )
     parts = [f"Question: {question}", f"Retrieved passages:\n{text_block}",
@@ -745,7 +751,8 @@ GET_PAGES_TOOL = {
                 "doc": {"type": "string",
                         "description": "Document filename as shown in citations, e.g. 'Morgan_Jones_Valve_Amplifiers.pdf'."},
                 "pages": {"type": "array", "items": {"type": "integer"},
-                          "description": "1-based page numbers to fetch, e.g. [106] or [111, 112]."},
+                          "description": "Page numbers to fetch, as PRINTED in the document / shown "
+                                         "in the (filename p.N) citations, e.g. [106] or [111, 112]."},
                 "context": {"type": "integer",
                             "description": "Also include this many pages before AND after each requested page (default 0, max 3)."},
             },
@@ -765,7 +772,7 @@ def _format_passages(contexts: list[dict]) -> str:
     if not contexts:
         return "No additional passages found for that query."
     return "\n\n".join(
-        f"[{c['doc']} p.{c['page']}]\n{c['text']}" for c in contexts
+        f"[{c['doc']} p.{_ctx_page(c)}]\n{c['text']}" for c in contexts
     )
 
 
@@ -1227,7 +1234,7 @@ def _answer_stream_cli(question: str, contexts: list[dict], image_paths: list[st
         return
 
     passages = "\n\n".join(
-        f"[{c['doc']} p.{c['page']}]\n{c['text']}" for c in contexts) or "(no passages retrieved)"
+        f"[{c['doc']} p.{_ctx_page(c)}]\n{c['text']}" for c in contexts) or "(no passages retrieved)"
     hist = ""
     if history:
         hist = "\n\n".join(f"{h['role'].upper()}: {h['content']}" for h in history) + "\n\n"

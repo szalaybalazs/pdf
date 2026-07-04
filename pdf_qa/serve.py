@@ -274,7 +274,8 @@ def handle_query(store: VectorStore | None, req: dict) -> None:
     # search_documents / get_pages tools.
     is_followup = bool(history)
     t0 = time.time()
-    contexts = [{"doc": c.doc, "page": c.page, "text": c.text} for c, _ in hits]
+    contexts = [{"doc": c.doc, "page": c.page, "page_label": c.page_label or str(c.page),
+                 "text": c.text} for c, _ in hits]
     images, seen, sources = [], set(), []
     if not is_followup:
         for c, _ in hits:
@@ -282,8 +283,9 @@ def handle_query(store: VectorStore | None, req: dict) -> None:
             if img not in seen:
                 seen.add(img)
                 images.append(img)
-                sources.append({"doc": c.doc, "page": c.page, "image": img,
-                                "snippet": c.text[:400]})
+                sources.append({"doc": c.doc, "page": c.page,
+                                "page_label": c.page_label or str(c.page),
+                                "image": img, "snippet": c.text[:400]})
             if len(images) >= config.MAX_IMAGES:
                 break
         dbg = [f"{os.path.basename(p)}  ({_img_dims(p)})" for p in images]
@@ -304,12 +306,14 @@ def handle_query(store: VectorStore | None, req: dict) -> None:
         hits = _rerank_order(q, pool, k)
         new_ctx, new_imgs, new_src = [], [], []
         for c, _ in hits:
-            new_ctx.append({"doc": c.doc, "page": c.page, "text": c.text})
+            lbl = c.page_label or str(c.page)
+            new_ctx.append({"doc": c.doc, "page": c.page, "page_label": lbl, "text": c.text})
             img = config.resolve_image(c.image_path)
             if img not in seen:
                 seen.add(img)
                 new_imgs.append(img)
-                s = {"doc": c.doc, "page": c.page, "image": img, "snippet": c.text[:400]}
+                s = {"doc": c.doc, "page": c.page, "page_label": lbl,
+                     "image": img, "snippet": c.text[:400]}
                 sources.append(s)
                 new_src.append(s)
         tool("search_documents", q,
@@ -346,7 +350,20 @@ def handle_query(store: VectorStore | None, req: dict) -> None:
             return {"contexts": [], "images": [],
                     "note": f"No document named '{doc_req}'. Available documents: "
                             f"{', '.join(known_docs) or '(none)'}."}
-        wanted = sorted({p + d for p in pages for d in range(-context, context + 1) if p + d >= 1})[:12]
+        # The model addresses pages by the PRINTED label it saw in citations, but
+        # image files and page context are indexed by PDF page. Build both maps and
+        # translate the requested printed pages to PDF indices first (fall back to
+        # treating the number as an index for docs with no page labels).
+        idx_by_label: dict[str, int] = {}
+        label_by_idx: dict[int, str] = {}
+        for s in stores:
+            for c in s.chunks:
+                if c.doc == doc:
+                    lbl = c.page_label or str(c.page)
+                    idx_by_label.setdefault(lbl, c.page)
+                    label_by_idx.setdefault(c.page, lbl)
+        idx_pages = [idx_by_label.get(str(p), p) for p in pages]
+        wanted = sorted({p + d for p in idx_pages for d in range(-context, context + 1) if p + d >= 1})[:12]
         sample = next((c for s in stores for c in s.chunks if c.doc == doc), None)
         subdir = os.path.dirname(sample.image_path) if sample else os.path.splitext(doc)[0].replace(" ", "_")
         by_page: dict = {}
@@ -359,18 +376,19 @@ def handle_query(store: VectorStore | None, req: dict) -> None:
             img = config.resolve_image(f"{subdir}/p{pg:04d}.png")
             if not os.path.exists(img):
                 continue   # page number out of range / never rendered
+            lbl = label_by_idx.get(pg, str(pg))
             chunks = sorted(by_page.get(pg, []))
             text = "\n".join(t for _, t in chunks) if chunks else \
                 "(no extractable text on this page — read it from the page image)"
-            new_ctx.append({"doc": doc, "page": pg, "text": text})
+            new_ctx.append({"doc": doc, "page": pg, "page_label": lbl, "text": text})
             if img not in seen:
                 seen.add(img)
                 new_imgs.append(img)
-                s = {"doc": doc, "page": pg, "image": img, "snippet": text[:400]}
+                s = {"doc": doc, "page": pg, "page_label": lbl, "image": img, "snippet": text[:400]}
                 sources.append(s)
                 new_src.append(s)
-        tool("get_pages", f"{doc} pp.{','.join(str(p) for p in wanted)}",
-             [f"{doc} p.{c['page']}" for c in new_ctx] or ["no matching pages"],
+        tool("get_pages", f"{doc} pp.{','.join(str(p) for p in pages)}",
+             [f"{doc} p.{c['page_label']}" for c in new_ctx] or ["no matching pages"],
              [f"p{pg:04d}.png" for pg in wanted], ts)
         note = None if new_ctx else \
             f"{doc} has no pages {pages} (with context {context}); they may be out of range."

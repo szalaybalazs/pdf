@@ -119,7 +119,7 @@ def page_text(page: "fitz.Page", img_path: Path, use_ocr: bool) -> tuple[str, st
 
 
 def extract_table_chunks(page: "fitz.Page", pdf_path: Path, pno: int,
-                         rel_img: str, start_index: int) -> list[Chunk]:
+                         rel_img: str, start_index: int, page_label: str = "") -> list[Chunk]:
     """Reconstruct tables on a page into markdown chunks. Each table becomes one
     chunk (text = a '[Table p.N]' marker + the markdown grid), so the numbers in
     a table are searchable as cells rather than lost in the prose reading order.
@@ -144,7 +144,7 @@ def extract_table_chunks(page: "fitz.Page", pdf_path: Path, pno: int,
         text = f"[Table on p.{pno + 1}]\n{md}"[:config.TABLE_CHARS_MAX]
         out.append(Chunk(id=f"{pdf_path.name}:p{pno + 1:04d}:t{ti}",
                          doc=pdf_path.name, page=pno + 1, chunk_index=start_index + ti,
-                         text=text, image_path=rel_img, kind="table"))
+                         text=text, image_path=rel_img, kind="table", page_label=page_label))
     return out
 
 
@@ -170,15 +170,25 @@ def _process_page(pdf_path: Path, safe: str, pno: int, use_ocr: bool,
     text, source = page_text(page, img_path, use_ocr)
     ocr_used = 1 if source == "ocr" else 0
 
+    # Printed page label (e.g. "106" or "xiv"), if the PDF carries a page-label
+    # tree. Empty when the printed page equals the PDF page index (no front matter
+    # offset), in which case display falls back to the index.
+    try:
+        label = (page.get_label() or "").strip()
+    except Exception:
+        label = ""
+    if label == str(pno + 1):
+        label = ""   # identical to the index — no need to store it
+
     chunks = [
         Chunk(id=f"{pdf_path.name}:p{pno+1:04d}:c{ci}",
               doc=pdf_path.name, page=pno + 1, chunk_index=ci,
-              text=ctext, image_path=rel_img)
+              text=ctext, image_path=rel_img, page_label=label)
         for ci, ctext in enumerate(chunk_page_text(text, config.CHUNK_WORDS, config.CHUNK_OVERLAP))
     ]
     # Tables are extracted separately and appended as their own chunks, numbered
     # after the prose chunks so chunk_index stays unique within the page.
-    chunks += extract_table_chunks(page, pdf_path, pno, rel_img, len(chunks))
+    chunks += extract_table_chunks(page, pdf_path, pno, rel_img, len(chunks), label)
     return pno, chunks, scanned, ocr_used, failed
 
 

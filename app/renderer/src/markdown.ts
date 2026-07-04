@@ -241,13 +241,15 @@ export function splitThinking(text: string): [string, string] {
 /** Turn "(Doc... p.12)" citations into clickable links to the page image. */
 export function linkifyCitationsHtml(html: string, sources: Source[]): string {
   return html.replace(/\(([^()]*?p\.?\s?(\d+))\)/g, (whole, _inner, pageStr) => {
-    const page = parseInt(pageStr, 10);
-    const src = sources.find((s) => s.page === page);
+    // The cited number is the PRINTED page the model saw; match it against each
+    // source's printed label (fall back to the PDF page for label-less docs).
+    const cited = pageStr;
+    const src = sources.find((s) => (s.page_label ?? String(s.page)) === cited);
     if (!src) return whole;
-    // data-doc/-page/-snippet let the click handler ask the backend for a
-    // highlighted render of the cited passage (falls back to the plain image).
+    // data-page is the PDF page INDEX (used to open/highlight the right image),
+    // independent of the printed label shown in the citation text.
     return `<a class="fig" data-img="${escapeHtml(src.image)}"`
-      + ` data-doc="${escapeHtml(src.doc)}" data-page="${page}"`
+      + ` data-doc="${escapeHtml(src.doc)}" data-page="${src.page}"`
       + ` data-snippet="${escapeHtml((src.snippet || "").slice(0, 400))}">${whole}</a>`;
   });
 }

@@ -148,8 +148,25 @@ def extract_table_chunks(page: "fitz.Page", pdf_path: Path, pno: int,
     return out
 
 
+def _figure_caption_chunk(page: "fitz.Page", pdf_path: Path, pno: int, rel_img: str,
+                          img_path: Path, page_label: str) -> Chunk | None:
+    """For a page that yielded no text but carries a figure/diagram, vision-caption
+    it so it's reachable by text retrieval. Returns a kind="figure" chunk, or None
+    when there's nothing to caption or the caption call fails."""
+    if not page.get_images():
+        return None
+    from .llm import caption_image
+    caption = caption_image(str(img_path))
+    if not caption:
+        return None
+    return Chunk(id=f"{pdf_path.name}:p{pno + 1:04d}:f0",
+                 doc=pdf_path.name, page=pno + 1, chunk_index=0,
+                 text=f"[Figure on p.{pno + 1}]\n{caption}", image_path=rel_img,
+                 kind="figure", page_label=page_label)
+
+
 def _process_page(pdf_path: Path, safe: str, pno: int, use_ocr: bool,
-                  doc_for) -> tuple[int, list[Chunk], int, int, int]:
+                  doc_for, caption_figures: bool = False) -> tuple[int, list[Chunk], int, int, int]:
     """Render + extract one page. Returns (pno, chunks, scanned, ocr_used, failed).
 
     Runs on a worker thread; `doc_for()` hands back this thread's own fitz handle
@@ -189,6 +206,12 @@ def _process_page(pdf_path: Path, safe: str, pno: int, use_ocr: bool,
     # Tables are extracted separately and appended as their own chunks, numbered
     # after the prose chunks so chunk_index stays unique within the page.
     chunks += extract_table_chunks(page, pdf_path, pno, rel_img, len(chunks), label)
+    # A page with a figure but no extractable text is invisible to retrieval; when
+    # enabled, caption it so it can be found. Only when the page produced no text.
+    if caption_figures and not chunks:
+        fig = _figure_caption_chunk(page, pdf_path, pno, rel_img, img_path, label)
+        if fig is not None:
+            chunks.append(fig)
     return pno, chunks, scanned, ocr_used, failed
 
 
@@ -202,6 +225,9 @@ def ingest_pdf(pdf_path: Path, store: VectorStore, embed: bool, use_ocr: bool = 
     the calling thread. `store_lock`, if given, serializes the store.add() call so
     several documents can be ingested into the same store concurrently."""
     workers = config.INGEST_WORKERS if workers is None else max(1, workers)
+    # Only caption figure pages when we're actually embedding (a dry run wouldn't
+    # index the caption, so paying for the vision call would be wasted).
+    caption_figures = config.EXTRACT_FIGURES and embed
     safe = pdf_path.stem.replace(" ", "_")
     with fitz.open(pdf_path) as probe:
         n_pages = len(probe)
@@ -229,7 +255,7 @@ def ingest_pdf(pdf_path: Path, store: VectorStore, embed: bool, use_ocr: bool = 
     bar = tqdm(total=n_pages, desc=pdf_path.name[:30], unit="pg", leave=False)
     try:
         with ThreadPoolExecutor(max_workers=workers) as ex:
-            futures = [ex.submit(_process_page, pdf_path, safe, pno, use_ocr, _doc_for)
+            futures = [ex.submit(_process_page, pdf_path, safe, pno, use_ocr, _doc_for, caption_figures)
                        for pno in range(n_pages)]
             done = 0
             for fut in as_completed(futures):
@@ -276,6 +302,7 @@ def ingest_pdf(pdf_path: Path, store: VectorStore, embed: bool, use_ocr: bool = 
 
     return {"pages": n_pages, "chunks": len(pending_chunks),
             "table_chunks": sum(1 for c in pending_chunks if c.kind == "table"),
+            "figure_chunks": sum(1 for c in pending_chunks if c.kind == "figure"),
             "scanned_pages": scanned_pages, "failed_pages": failed_pages,
             "ocr_pages": ocr_pages}
 
@@ -632,8 +659,8 @@ def main(argv=None):
         print(f"OCR fallback: {'ON' if use_ocr else 'OFF'}")
     print()
 
-    totals = {"pages": 0, "chunks": 0, "table_chunks": 0, "scanned_pages": 0,
-              "failed_pages": 0, "ocr_pages": 0}
+    totals = {"pages": 0, "chunks": 0, "table_chunks": 0, "figure_chunks": 0,
+              "scanned_pages": 0, "failed_pages": 0, "ocr_pages": 0}
     for p in pdfs:
         stats = ingest_pdf(p, store, embed=not args.no_embed, use_ocr=use_ocr, workers=workers)
         for k in totals:

@@ -324,6 +324,13 @@ OCR_LANG = os.getenv("OCR_LANG", "eng")              # Tesseract language(s), e.
 EXTRACT_TABLES = _bool_env("EXTRACT_TABLES", True)
 TABLE_CHARS_MAX = int(os.getenv("TABLE_CHARS_MAX", "4000"))  # cap per table chunk
 
+# Caption figure-only pages (a diagram/schematic with no usable text layer) with
+# the vision model at ingest, and index the caption so those pages — otherwise
+# invisible to text retrieval — can be found by an initial search. Costs one
+# vision call per figure page, so it's OFF by default; turn on for figure-heavy
+# libraries. Only pages that yield no text chunk are captioned.
+EXTRACT_FIGURES = _bool_env("EXTRACT_FIGURES", False)
+
 # Worker threads for ingestion. Page rendering (PyMuPDF releases the GIL), OCR
 # (a tesseract subprocess) and embedding (network) all run concurrently across
 # these, so a multi-hundred-page book ingests several times faster. Each worker

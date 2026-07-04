@@ -407,6 +407,39 @@ def _image_data_url(path: str, max_dim: int) -> str:
     return f"data:image/jpeg;base64,{_image_jpeg_b64(path, max_dim)}"
 
 
+_CAPTION_PROMPT = (
+    "This is an image of a document page that has little or no extractable text — "
+    "typically a figure, schematic, chart, or table. Write a concise, keyword-rich "
+    "description (2–4 sentences) for SEARCH: name any figure/table numbers, titles, "
+    "axis labels, component or signal names, tube/part numbers, and what the page "
+    "depicts. Do not add facts you can't see. If the page is blank or purely "
+    "decorative, reply with exactly 'blank'."
+)
+
+
+def caption_image(image_path: str) -> str:
+    """Vision-caption a page image so figure-only pages (no text layer) become
+    retrievable by the text index. Routes through the configured OpenAI-compatible
+    chat client. Best-effort: returns "" on failure or a 'blank' page."""
+    spec = config.MODELS.get("openai") or config.resolve_model(None)
+    client = _chat_client(None)
+    model = _chat_model_id(spec)
+    content = [
+        {"type": "text", "text": _CAPTION_PROMPT},
+        {"type": "image_url", "image_url": {"url": _image_data_url(image_path, config.VISION_MAX_DIM)}},
+    ]
+    try:
+        resp = client.chat.completions.create(
+            model=model, max_tokens=220,
+            messages=[{"role": "user", "content": content}])
+        text = (resp.choices[0].message.content or "").strip()
+    except Exception:
+        return ""
+    if not text or text.strip().lower().strip(".'\"") == "blank":
+        return ""
+    return text
+
+
 SYSTEM_PROMPT = (
     "You are a precise technical assistant for engineering documents (textbooks and "
     "datasheets). You are given (1) extracted text passages and (2) images of the "

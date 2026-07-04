@@ -241,6 +241,15 @@ function IngestProgress() {
 
 export function Sidebar() {
   const [docsOpen, setDocsOpen] = useState(true);
+  // Inline "new library" input — Electron's renderer doesn't support window.prompt().
+  const [creating, setCreating] = useState(false);
+  const [newLib, setNewLib] = useState("");
+  const submitNewLib = () => {
+    const n = newLib.trim();
+    if (n) void createCollection(n);
+    setNewLib("");
+    setCreating(false);
+  };
   const threads = visibleThreads();
   const threadGroups = groupThreadsByDate(threads);
   const searching = store.searchResults !== null;
@@ -309,23 +318,42 @@ export function Sidebar() {
 
       {store.collections.length >= 1 && (
         <div className="mt-3 flex items-center gap-1 px-1 pt-2" title="Active library">
-          <select
-            className="h-[28px] min-w-0 flex-1 rounded-md border border-border bg-bg px-1.5 text-[13px] text-muted"
-            value={store.activeCollection}
-            onChange={(e) => switchCollection(e.target.value)}
-          >
-            {store.collections.map((c) => (
-              <option key={c.name} value={c.name}>
-                {c.name === "default" ? "Default library" : c.name} ({c.docs})
-              </option>
-            ))}
-          </select>
+          {creating ? (
+            <input
+              autoFocus
+              className="h-[28px] min-w-0 flex-1 rounded-md border border-border bg-bg px-1.5 text-[13px] text-muted outline-none"
+              placeholder="New library name…"
+              value={newLib}
+              onChange={(e) => setNewLib(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") submitNewLib();
+                else if (e.key === "Escape") { setNewLib(""); setCreating(false); }
+              }}
+              onBlur={() => { setNewLib(""); setCreating(false); }}
+            />
+          ) : (
+            <select
+              className="h-[28px] min-w-0 flex-1 rounded-md border border-border bg-bg px-1.5 text-[13px] text-muted"
+              value={store.activeCollection}
+              onChange={(e) => switchCollection(e.target.value)}
+            >
+              {store.collections.map((c) => (
+                <option key={c.name} value={c.name}>
+                  {c.name === "default" ? "Default library" : c.name} ({c.docs})
+                </option>
+              ))}
+            </select>
+          )}
           <button
             className="flex h-[28px] w-[28px] items-center justify-center rounded-md text-faint transition hover:bg-bg hover:text-muted"
-            title="New library"
-            onClick={() => { const n = window.prompt("New library name"); if (n) createCollection(n); }}
+            title={creating ? "Create library" : "New library"}
+            // onMouseDown (not onClick) so it fires before the input's onBlur cancels.
+            onMouseDown={(e) => {
+              e.preventDefault();
+              if (creating) submitNewLib(); else setCreating(true);
+            }}
           >+</button>
-          {store.activeCollection !== "default" && (
+          {!creating && store.activeCollection !== "default" && (
             <button
               className="flex h-[28px] w-[28px] items-center justify-center rounded-md text-faint transition hover:bg-bg hover:text-muted"
               title={`Delete the “${store.activeCollection}” library`}

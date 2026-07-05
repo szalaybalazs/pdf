@@ -28,6 +28,21 @@ DATA_DIR = Path(os.getenv("PDF_QA_DATA_DIR", str(Path(__file__).resolve().parent
 COLLECTIONS_DIR = Path(os.getenv("PDF_QA_COLLECTIONS_DIR", str(DATA_DIR / "collections")))
 ACTIVE_COLLECTION = os.getenv("PDF_QA_COLLECTION", "").strip() or "default"
 
+# --- Remote libraries --------------------------------------------------------
+# A remote library keeps its index on a shared server (see index_server/) so
+# several apps can query and grow the same index. When PDF_QA_REMOTE_URL is set,
+# the active library is remote: serve/ingest route through the RemoteVectorStore
+# instead of the local on-disk store. The secret is the server's shared secret
+# (empty = the server is open). PDF_QA_REMOTE_LIBRARY is the library's name on
+# the server; it defaults to the active collection name.
+REMOTE_URL = os.getenv("PDF_QA_REMOTE_URL", "").strip()
+REMOTE_SECRET = os.getenv("PDF_QA_REMOTE_SECRET", "")
+REMOTE_LIBRARY = os.getenv("PDF_QA_REMOTE_LIBRARY", "").strip() or ACTIVE_COLLECTION
+IS_REMOTE = bool(REMOTE_URL)
+# Where a remote library's fetched chunk metadata + page images are cached. Kept
+# under DATA_DIR so the desktop app's dataDir-guarded image reader can serve them.
+REMOTE_CACHE_DIR = DATA_DIR / "remote-cache" / (REMOTE_LIBRARY or "default")
+
 
 def _collection_base() -> Path:
     if ACTIVE_COLLECTION.lower() != "default":
@@ -54,9 +69,17 @@ DB_PATH = Path(os.getenv("PDF_QA_DB", str(DATA_DIR / "threads.db")))
 def resolve_image(p: str) -> str:
     """Resolve a stored page-image path to an absolute path. New indexes store
     paths relative to PAGES_DIR; legacy indexes stored absolute paths — pass
-    those through unchanged so old stores keep working."""
+    those through unchanged so old stores keep working. For a remote library the
+    page is fetched from the server and cached locally, and that cached path is
+    returned (it may not exist yet if the server never rendered the page — callers
+    already guard with os.path.exists)."""
     if os.path.isabs(p):
         return p
+    if IS_REMOTE:
+        from .remote_store import cache_page
+        local = cache_page(p)
+        if local is not None:
+            return local
     return str(PAGES_DIR / p)
 
 # --- Models ------------------------------------------------------------------

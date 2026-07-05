@@ -616,10 +616,13 @@ def main(argv=None) -> int:
         pass
 
     tstore = ThreadStore(config.DB_PATH)
+    from . import store_backend
     try:
-        store = VectorStore.load(config.STORE_PATH)
-    except FileNotFoundError:
-        store = None  # no PDF index yet — threads/settings still work; queries error
+        store = store_backend.open_store()
+    except Exception as e:  # remote unreachable / bad secret — keep serving; queries error
+        capture_exception(e)
+        print(f"pdf_qa: could not open store: {e}", file=sys.stderr, flush=True)
+        store = None  # no index available — threads/settings still work; queries error
 
     _warm_imports()
 
@@ -642,7 +645,9 @@ def main(argv=None) -> int:
             emit({"type": "ready", **_index_stats(store)})
         elif kind == "reload":
             try:
-                store = VectorStore.load(config.STORE_PATH)
+                # Local: reopen from disk. Remote: reconnect + refetch chunk
+                # metadata (so docs another app added become visible).
+                store = store_backend.open_store()
                 emit({"type": "ready", **_index_stats(store)})
             except Exception as e:  # noqa: BLE001
                 capture_exception(e)
@@ -696,7 +701,9 @@ def main(argv=None) -> int:
             except Exception:
                 page = 0
             safe = os.path.splitext(doc)[0].replace(" ", "_")
-            img = config.PAGES_DIR / safe / f"p{page:04d}.png"
+            # resolve_image fetches + caches from the server for a remote library;
+            # for a local one it's just PAGES_DIR/<rel>.
+            img = config.resolve_image(f"{safe}/p{page:04d}.png")
             label = str(page)
             if store is not None:
                 for c in store.chunks:
@@ -705,7 +712,7 @@ def main(argv=None) -> int:
                         break
             emit({"type": "page_image", "reqId": req.get("reqId"), "doc": doc,
                   "page": page, "label": label,
-                  "path": str(img) if img.exists() else None})
+                  "path": img if os.path.exists(img) else None})
         elif kind == "highlight":
             # Produce a page image with the cited passage highlighted; the UI opens
             # the returned path (or falls back to the plain page image on null).

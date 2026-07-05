@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { AssistantMsg, ToolEvent, Segment, Calc } from "../types";
-import { store, activeThread, regenerate, threadOff, openCitation } from "../store";
+import { store, activeThread, regenerate, threadOff, openCitation, libraryLabel } from "../store";
 import { api } from "../trpc";
 import { platformText, SEP, LEADING_SEP } from "../platform";
 import {
@@ -213,13 +213,20 @@ export function Assistant({ m }: { m: AssistantMsg }) {
             </div>
           )}
 
-          {((m.usage && m.usage.total) || m.latency) && (
+          {((m.usage && m.usage.total) || m.latency || m.library) && (
             <div className="usage">
               {m.usage && m.usage.total
                 ? <>{fmtNumber(m.usage.prompt)} in + {fmtNumber(m.usage.completion)} out = {fmtNumber(m.usage.total)} tokens
                     {m.usage.reasoning ? `${SEP}${fmtNumber(m.usage.reasoning)} reasoning tokens` : ""}{SEP}</>
                 : null}
               {m.latency ? `${fmtDuration(m.latency)}${SEP}` : ""}{platformText(m.model || store.visionModel)}
+              {/* Which library this question was answered from — the context the
+                  model retrieved over. Always shown so every answer is attributable. */}
+              {m.library ? (
+                <span title={m.remote ? `Remote library${m.libraryUrl ? ` · ${m.libraryUrl}` : ""}` : "Local library"}>
+                  {SEP}{m.remote ? "☁ " : "⛁ "}{libraryLabel(m.library)}
+                </span>
+              ) : null}
               {m.sessionId ? `${SEP}sid:${m.sessionId}` : ""}
             </div>
           )}

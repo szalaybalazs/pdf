@@ -1,0 +1,24 @@
+# Run the shared remote index server.
+#   docker compose -f index_server/docker-compose.yml up -d --build
+#
+# Set a secret to require auth (clients send it as a Bearer token). Leave it
+# empty / unset for an open server that allows any access.
+services:
+  index:
+    # Pull the published image with `docker compose pull`, or build locally with
+    # `docker compose up --build` (the build section wins when --build is passed).
+    image: ghcr.io/szalaybalazs/pdf-qa-index:latest
+    build:
+      context: ..
+      dockerfile: index_server/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      # INDEX_SERVER_SECRET: "change-me"   # uncomment to require a shared secret
+      INDEX_SERVER_DATA_DIR: /data
+    volumes:
+      - index-data:/data
+    restart: unless-stopped
+
+volumes:
+  index-data:

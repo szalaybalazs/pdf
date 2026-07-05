@@ -34,6 +34,9 @@ app.setName(APP_NAME);
 const PROJECT_ROOT = path.resolve(__dirname, "..", "..");
 const PYTHON = process.env.PDF_QA_PYTHON || "python3";
 const DEFAULT_LOCAL_BASE_URL = "http://localhost:11434/v1";
+// Default remote index-server URL, used when a remote library is added without an
+// explicit URL (the server runs on :8000 by default; see index_server/).
+const DEFAULT_REMOTE_INDEX_URL = "http://localhost:8000";
 
 // --- backend command resolution ---------------------------------------------
 // In development we run the Python source directly (`python3 -m pdf_qa.<sub>`).
@@ -189,6 +192,49 @@ function activeIndexDir(): string {
   return collectionIndexDir(getActiveCollection());
 }
 
+// --- remote libraries -------------------------------------------------------
+// A remote library keeps its index on a shared server (index_server/) so several
+// apps can query and grow the same index. We store the connection details in a
+// registry file; a library is "remote" when its name is in this registry. The
+// backend is pointed at it via PDF_QA_REMOTE_* env on spawn (see backendEnv).
+interface RemoteLibrary { name: string; url: string; secret: string; remoteName: string; }
+
+function remoteLibrariesPath(): string {
+  return path.join(dataDir(), "remote-libraries.json");
+}
+
+function readRemoteLibraries(): RemoteLibrary[] {
+  try {
+    const raw = JSON.parse(fs.readFileSync(remoteLibrariesPath(), "utf-8"));
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .filter((r) => r && typeof r.name === "string" && typeof r.url === "string")
+      .map((r) => ({
+        name: String(r.name), url: String(r.url).replace(/\/+$/, ""),
+        secret: typeof r.secret === "string" ? r.secret : "",
+        remoteName: typeof r.remoteName === "string" && r.remoteName ? r.remoteName : String(r.name),
+      }));
+  } catch { return []; }
+}
+
+function writeRemoteLibraries(libs: RemoteLibrary[]): void {
+  try {
+    fs.writeFileSync(remoteLibrariesPath(), JSON.stringify(libs, null, 2));
+  } catch (e) {
+    log("warn", "could not persist remote libraries", (e as Error).message);
+  }
+}
+
+function findRemoteLibrary(name: string): RemoteLibrary | undefined {
+  return readRemoteLibraries().find((r) => r.name === name);
+}
+
+// The remote config for whichever library is active, or null when the active
+// library is a local (on-disk) collection.
+function getActiveRemote(): RemoteLibrary | null {
+  return findRemoteLibrary(getActiveCollection()) ?? null;
+}
+
 // Per-library settings live in a small meta.json inside the collection's index
 // dir (which always exists — created on collection create, and dataDir()/index
 // for the default library). Currently just the OCR language.
@@ -331,7 +377,14 @@ function emitLog(line: string): void { bus.emit("serve-log", line); }
 function backendEnv(): NodeJS.ProcessEnv {
   const DATA_DIR = dataDir();
   const collection = getActiveCollection();
-  const INDEX_DIR = collectionIndexDir(collection);
+  const remote = getActiveRemote();
+  // A remote library has no local collection dir — pointing INDEX_DIR at one
+  // would create a phantom `collections/<name>` that then shows up as a bogus
+  // LOCAL library. Use a remote-scoped cache dir instead (page images fetched
+  // from the server are cached under here).
+  const INDEX_DIR = remote
+    ? path.join(DATA_DIR, "remote-cache", remote.remoteName, "index")
+    : collectionIndexDir(collection);
   fs.mkdirSync(INDEX_DIR, { recursive: true });
   const settings = readSettings();
   const env: NodeJS.ProcessEnv = {
@@ -346,6 +399,13 @@ function backendEnv(): NodeJS.ProcessEnv {
   // for libraries that never chose a language.
   const ocrLang = getCollectionLanguage(collection);
   if (ocrLang) env.OCR_LANG = ocrLang;
+  // When the active library is remote, point the backend at the shared server.
+  // serve/ingest then route through the RemoteVectorStore instead of local disk.
+  if (remote) {
+    env.PDF_QA_REMOTE_URL = remote.url;
+    env.PDF_QA_REMOTE_SECRET = remote.secret;
+    env.PDF_QA_REMOTE_LIBRARY = remote.remoteName;
+  }
   // Keys set in the settings page take precedence over any inherited / .env value.
   if (settings.openaiKey) env.OPENAI_API_KEY = settings.openaiKey;
   if (settings.anthropicKey) env.ANTHROPIC_API_KEY = settings.anthropicKey;
@@ -647,7 +707,9 @@ function dispatchRendererEvent(name: string): void {
 
 function libraryMenuItems(): MenuItemConstructorOptions[] {
   return listCollectionsAction().map((c) => ({
-    label: `${c.name === "default" ? "Default library" : c.name} (${c.docs})`,
+    label: c.remote
+      ? `${c.name} (remote)`
+      : `${c.name === "default" ? "Default library" : c.name} (${c.docs})`,
     type: "radio" as const,
     checked: c.active,
     click: () => { setCollectionAction(c.name); },
@@ -788,20 +850,32 @@ function docCountForIndex(indexDir: string): number {
   } catch { return 0; }
 }
 
-function listCollectionsAction(): { name: string; docs: number; active: boolean; language: string }[] {
+function listCollectionsAction(): { name: string; docs: number; active: boolean; language: string; remote: boolean; url?: string }[] {
   const active = getActiveCollection();
+  // Remote library names are reserved: never list them as local, even if a stale
+  // `collections/<name>` dir exists from an older build.
+  const remoteNames = new Set(readRemoteLibraries().map((r) => r.name));
   const names = ["default"];
   try {
     for (const d of fs.readdirSync(collectionsRootDir(), { withFileTypes: true })) {
-      if (d.isDirectory() && d.name !== "default") names.push(d.name);
+      if (d.isDirectory() && d.name !== "default" && !remoteNames.has(d.name)) names.push(d.name);
     }
   } catch { /* no collections dir yet */ }
-  return names.map((n) => ({
+  const local = names.map((n) => ({
     name: n,
     docs: docCountForIndex(collectionIndexDir(n)),
     active: n === active,
     language: getCollectionLanguage(n),
+    remote: false,
   }));
+  // Remote libraries live in the registry, not on disk. Their doc count isn't
+  // known without a network call, so report -1 (the UI shows the live count from
+  // the backend "ready" event once one is active).
+  const remote = readRemoteLibraries().map((r) => ({
+    name: r.name, docs: -1, active: r.name === active, language: "",
+    remote: true, url: r.url,
+  }));
+  return [...local, ...remote];
 }
 
 function createCollectionAction(name: string, language = ""): { ok: boolean; name?: string; error?: string } {
@@ -888,6 +962,93 @@ function renameCollectionAction(input: { name: string; newName: string }): { ok:
   installApplicationMenu();
   if (wasActive) restartBackend();
   return { ok: true, name: clean };
+}
+
+// Probe a remote index server's /health. Returns {ok} or {ok:false,error} — used
+// by the "Add remote library" dialog's connection test and before persisting one.
+async function testRemoteAction(input: { url: string; secret: string }): Promise<{ ok: boolean; error?: string; libraries?: number; documents?: number }> {
+  const url = ((input?.url || "").trim().replace(/\/+$/, "")) || DEFAULT_REMOTE_INDEX_URL;
+  if (!/^https?:\/\//i.test(url)) return { ok: false, error: "Enter a URL starting with http:// or https://" };
+  try {
+    const headers: Record<string, string> = {};
+    if (input.secret) headers["Authorization"] = `Bearer ${input.secret}`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    // Probe the authenticated inventory endpoint: it confirms reachability, checks
+    // the secret, and gives us the library + document counts in one call.
+    const res = await fetch(`${url}/v1/libraries`, { headers, signal: controller.signal });
+    clearTimeout(timer);
+    if (res.status === 401) return { ok: false, error: "Unauthorized — check the secret." };
+    if (!res.ok) return { ok: false, error: `Server responded ${res.status}` };
+    const body = await res.json().catch(() => ({ libraries: [] }));
+    const libs: { docs?: number }[] = Array.isArray(body.libraries) ? body.libraries : [];
+    const documents = libs.reduce((n, l) => n + (typeof l.docs === "number" && l.docs > 0 ? l.docs : 0), 0);
+    return { ok: true, libraries: libs.length, documents };
+  } catch (e) {
+    return { ok: false, error: `Could not reach the server: ${(e as Error).message}` };
+  }
+}
+
+// Add a remote library: validate + test the connection, persist it to the
+// registry, then switch to it (respawns the backend pointed at the server).
+async function addRemoteLibraryAction(input: { name: string; url: string; secret: string; remoteName?: string }): Promise<{ ok: boolean; name?: string; error?: string }> {
+  const name = sanitizeCollectionName(input?.name || "");
+  const url = ((input?.url || "").trim().replace(/\/+$/, "")) || DEFAULT_REMOTE_INDEX_URL;
+  const secret = input?.secret || "";
+  const remoteName = sanitizeCollectionName(input?.remoteName || "") || name;
+  if (!name || name.toLowerCase() === "default") return { ok: false, error: "Invalid library name." };
+  if (fs.existsSync(path.join(collectionsRootDir(), name))) return { ok: false, error: "A local library with that name already exists." };
+  if (findRemoteLibrary(name)) return { ok: false, error: "A remote library with that name already exists." };
+  const probe = await testRemoteAction({ url, secret });
+  if (!probe.ok) return { ok: false, error: probe.error || "Could not reach the server." };
+  const libs = readRemoteLibraries();
+  libs.push({ name, url, secret, remoteName });
+  writeRemoteLibraries(libs);
+  log("info", `added remote library ${name} -> ${url} (${remoteName})`);
+  track("remote_library_added");
+  setActiveCollectionFile(name);   // drop straight into it
+  installApplicationMenu();
+  restartBackend();
+  return { ok: true, name };
+}
+
+// Rename a remote library's app-side label. The server library (remoteName) is
+// left untouched — this only changes how the library is named in this app — so
+// other apps connected to the same server are unaffected.
+function renameRemoteLibraryAction(input: { name: string; newName: string }): { ok: boolean; name?: string; error?: string } {
+  const libs = readRemoteLibraries();
+  const idx = libs.findIndex((r) => r.name === input?.name);
+  if (idx < 0) return { ok: false, error: "No such remote library." };
+  const clean = sanitizeCollectionName(input?.newName || "");
+  if (!clean || clean.toLowerCase() === "default") return { ok: false, error: "Invalid library name." };
+  if (clean === input.name) return { ok: true, name: clean };
+  if (fs.existsSync(path.join(collectionsRootDir(), clean))) return { ok: false, error: "A local library with that name already exists." };
+  if (libs.some((r) => r.name === clean)) return { ok: false, error: "A remote library with that name already exists." };
+  const wasActive = input.name === getActiveCollection();
+  libs[idx] = { ...libs[idx], name: clean };
+  writeRemoteLibraries(libs);
+  if (wasActive) setActiveCollectionFile(clean);
+  log("info", `renamed remote library ${input.name} -> ${clean}`);
+  track("remote_library_renamed");
+  installApplicationMenu();
+  if (wasActive) restartBackend();
+  return { ok: true, name: clean };
+}
+
+// Remove a remote library from the registry (does NOT delete anything on the
+// server). If it was active, fall back to the Default library.
+function removeRemoteLibraryAction(name: string): { ok: boolean; error?: string } {
+  const libs = readRemoteLibraries();
+  const next = libs.filter((r) => r.name !== name);
+  if (next.length === libs.length) return { ok: false, error: "No such remote library." };
+  const wasActive = name === getActiveCollection();
+  if (wasActive) setActiveCollectionFile("default");
+  writeRemoteLibraries(next);
+  log("info", `removed remote library ${name}${wasActive ? " (was active -> default)" : ""}`);
+  track("remote_library_removed");
+  installApplicationMenu();
+  if (wasActive) restartBackend();
+  return { ok: true };
 }
 
 // Switch the active collection: persist the choice and respawn the backend so it
@@ -1174,6 +1335,79 @@ async function setSettingsAction(s: Settings): Promise<{ ok: boolean }> {
 // their own throwaway index dir, so they're unaffected and not guarded.)
 let mainIngestInFlight = false;
 
+// Run one `pdf_qa.ingest` subprocess, streaming its JSON progress lines to the
+// renderer as ingest events. Resolves with the exit code. Shared by the local
+// "Add PDFs" path and both phases of the remote path.
+function runIngestProc(extraArgs: string[], env: NodeJS.ProcessEnv): Promise<number> {
+  return new Promise((resolve) => {
+    const { cmd, args, cwd } = backendCommand("ingest", extraArgs);
+    const proc = spawn(cmd, args, { cwd, env, windowsHide: true });
+    log("info", `ingest pid=${proc.pid ?? "?"} (${extraArgs[0]})`);
+    const rl = readline.createInterface({ input: proc.stdout });
+    rl.on("line", (line) => {
+      line = line.trim();
+      if (!line) return;
+      try {
+        const ev = JSON.parse(line);
+        log("info", `ingest event: ${ev?.type ?? "?"}`, preview(ev));
+        if (ev?.type === "ingest_done" && typeof ev.added === "number") {
+          track("pdf_ingested", { added: ev.added });
+          if (ev.added > 0 && firstTime("first_pdf")) track("first_pdf_added", { added: ev.added });
+        }
+        trackIngestEvent(ev);
+        emitIngest(ev);
+      } catch { emitLog(line); }
+    });
+    let err = "";
+    proc.stderr.on("data", (d: Buffer) => { err = (err + d.toString()).slice(-1500); log("warn", "ingest stderr", preview(d.toString(), 500)); });
+    proc.on("error", (e) => {
+      log("error", "ingest spawn error", e.message);
+      track("ingest_failed", { kind: "spawn_failed" });
+      emitIngest({ type: "ingest_error", message: e.message });
+      resolve(1);
+    });
+    proc.on("close", (code) => {
+      log(code === 0 ? "info" : "warn", `ingest exited (code ${code ?? "?"})`);
+      if (code !== 0)
+        emitIngest({ type: "ingest_error", message: err.trim().split("\n").slice(-2).join(" ") || `exit ${code}` });
+      resolve(code ?? 0);
+    });
+  });
+}
+
+// Remote "Add PDFs": build the index LOCALLY into a throwaway temp dir (reusing
+// all the normal render/OCR/embed machinery, with the remote env stripped so it
+// writes to disk), then push the result up to the shared server. Two phases keep
+// the heavy ingest path identical to the local one; only the upload is new.
+async function ingestToRemote(filePaths: string[], remote: RemoteLibrary): Promise<void> {
+  const tempIndexDir = path.join(dataDir(), "remote-ingest", String(Date.now()));
+  fs.mkdirSync(tempIndexDir, { recursive: true });
+  // Phase 1 — local build into temp. Strip the remote vars so ingest writes to
+  // disk; point INDEX_DIR at the temp dir.
+  const localEnv: NodeJS.ProcessEnv = { ...backendEnv(), INDEX_DIR: tempIndexDir };
+  delete localEnv.PDF_QA_REMOTE_URL;
+  delete localEnv.PDF_QA_REMOTE_SECRET;
+  delete localEnv.PDF_QA_REMOTE_LIBRARY;
+  const buildCode = await runIngestProc(["--add", ...filePaths, "--json"], localEnv);
+  // Copy the original PDFs alongside the built index so the push uploads them to
+  // the server — that's what lets the cited-passage highlight overlay work for
+  // every app connected to this library (it re-renders from the source PDF).
+  if (buildCode === 0) {
+    const sourcesDir = path.join(tempIndexDir, "sources");
+    fs.mkdirSync(sourcesDir, { recursive: true });
+    for (const fp of filePaths) {
+      try { fs.copyFileSync(fp, path.join(sourcesDir, path.basename(fp))); }
+      catch (e) { log("warn", `could not stage source PDF ${fp}`, (e as Error).message); }
+    }
+    // Phase 2 — push temp -> server (remote env set via backendEnv()).
+    await runIngestProc(["--push-remote", tempIndexDir, "--json"], backendEnv());
+  }
+  // The live backend refetches the server's chunk metadata.
+  sendToBackend({ type: "reload" });
+  try { fs.rmSync(tempIndexDir, { recursive: true, force: true }); }
+  catch (e) { log("warn", "could not clean remote-ingest temp dir", (e as Error).message); }
+}
+
 // Pick PDFs and ingest them incrementally, streaming progress to the renderer.
 // The dialog allows selecting many files at once ("multiSelections"); every
 // picked file is handed to a single ingest run that processes them concurrently.
@@ -1202,42 +1436,13 @@ async function addPdfsAction(): Promise<{ canceled: boolean; count?: number }> {
 
   mainIngestInFlight = true;
   try {
-    await new Promise<void>((resolve) => {
-      const { cmd, args, cwd } = backendCommand("ingest", ["--add", ...picked.filePaths, "--json"]);
-      const proc = spawn(cmd, args, { cwd, env: backendEnv(), windowsHide: true });
-      log("info", `ingest pid=${proc.pid ?? "?"}`);
-      const rl = readline.createInterface({ input: proc.stdout });
-      rl.on("line", (line) => {
-        line = line.trim();
-        if (!line) return;
-        try {
-          const ev = JSON.parse(line);
-          log("info", `ingest event: ${ev?.type ?? "?"}`, preview(ev));
-          if (ev?.type === "ingest_done" && typeof ev.added === "number") {
-            track("pdf_ingested", { added: ev.added });
-            if (ev.added > 0 && firstTime("first_pdf")) track("first_pdf_added", { added: ev.added });
-          }
-          trackIngestEvent(ev);
-          emitIngest(ev);
-        }
-        catch { emitLog(line); }
-      });
-      let err = "";
-      proc.stderr.on("data", (d: Buffer) => { err = (err + d.toString()).slice(-1500); log("warn", "ingest stderr", preview(d.toString(), 500)); });
-      proc.on("error", (e) => {
-        log("error", "ingest spawn error", e.message);
-        track("ingest_failed", { kind: "spawn_failed" });
-        emitIngest({ type: "ingest_error", message: e.message });
-      });
-      proc.on("close", (code) => {
-        log(code === 0 ? "info" : "warn", `ingest exited (code ${code ?? "?"})`);
-        if (code !== 0)
-          emitIngest({ type: "ingest_error", message: err.trim().split("\n").slice(-2).join(" ") || `exit ${code}` });
-        // tell the live backend to reload the freshly-written index
-        sendToBackend({ type: "reload" });
-        resolve();
-      });
-    });
+    const remote = getActiveRemote();
+    if (remote) {
+      await ingestToRemote(picked.filePaths, remote);
+    } else {
+      await runIngestProc(["--add", ...picked.filePaths, "--json"], backendEnv());
+      sendToBackend({ type: "reload" });   // reload the freshly-written local index
+    }
   } finally {
     mainIngestInFlight = false;
   }
@@ -1380,6 +1585,10 @@ const routerDeps: RouterDeps = {
   deleteCollection: deleteCollectionAction,
   renameCollection: renameCollectionAction,
   setCollectionLanguage: setCollectionLanguageAction,
+  addRemoteLibrary: addRemoteLibraryAction,
+  removeRemoteLibrary: removeRemoteLibraryAction,
+  renameRemoteLibrary: renameRemoteLibraryAction,
+  testRemote: testRemoteAction,
   readImage: readImageAction,
   getUpdateState,
   installUpdate: installUpdateAction,

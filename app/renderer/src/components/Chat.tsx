@@ -1,7 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   store, activeThread, send, showModelMenu, enabledDocs,
-  addTempPdfsToThread, threadDocs,
+  addTempPdfsToThread, threadDocs, libraryLabel,
 } from "../store";
 import { Assistant } from "./Assistant";
 import { APP_NAME } from "../../../src/branding";
@@ -95,15 +95,45 @@ function Messages() {
 
   return (
     <section ref={scrollerRef} onScroll={onScroll} style={scrollerStyle} className="min-h-0 flex-1 overflow-y-auto px-0 py-8">
-      {t.messages.map((m, i) =>
-        m.kind === "user" ? (
-          <div className="mx-auto mb-6 flex max-w-[780px] flex-col items-end px-8" key={i}>
-            <div className="max-w-[82%] whitespace-pre-wrap rounded-[20px] bg-surface-2 px-4 py-2.5 text-[15px] leading-relaxed text-ink shadow-[0_1px_1px_rgba(20,20,18,0.03)]">{m.text}</div>
+      {(() => {
+        // Insert a subtle divider whenever the library OR the answering model
+        // changes mid-thread, so a shift in the model's context is impossible to
+        // miss. Library is keyed off m.library (present on both message kinds, so
+        // it lands before the new-library question); model off the assistant's
+        // actual m.model (so it lands before the answer that used it). The first
+        // of each doesn't get a divider.
+        let prevLib: string | undefined;
+        let prevModel: string | undefined;
+        const divider = (text: string, key: string) => (
+          <div className="mx-auto my-4 flex max-w-[780px] items-center gap-3 px-8 text-[11.5px] text-faint" key={key}>
+            <div className="h-px flex-1 bg-border" />
+            <span className="whitespace-nowrap">{text}</span>
+            <div className="h-px flex-1 bg-border" />
           </div>
-        ) : (
-          <Assistant m={m} key={m.reqId || i} />
-        )
-      )}
+        );
+        return t.messages.map((m, i) => {
+          const dividers: React.ReactNode[] = [];
+          const lib = m.library;
+          if (lib && prevLib !== undefined && lib !== prevLib) {
+            dividers.push(divider(`switched to ${libraryLabel(lib)}`, `libdiv-${i}`));
+          }
+          if (lib !== undefined) prevLib = lib;
+          if (m.kind === "assistant" && m.model) {
+            if (prevModel !== undefined && m.model !== prevModel) {
+              dividers.push(divider(`switched to ${platformText(m.model)}`, `moddiv-${i}`));
+            }
+            prevModel = m.model;
+          }
+          const body = m.kind === "user" ? (
+            <div className="mx-auto mb-6 flex max-w-[780px] flex-col items-end px-8" key={i}>
+              <div className="max-w-[82%] whitespace-pre-wrap rounded-[20px] bg-surface-2 px-4 py-2.5 text-[15px] leading-relaxed text-ink shadow-[0_1px_1px_rgba(20,20,18,0.03)]">{m.text}</div>
+            </div>
+          ) : (
+            <Assistant m={m} key={m.reqId || i} />
+          );
+          return dividers.length ? <React.Fragment key={`f-${i}`}>{dividers}{body}</React.Fragment> : body;
+        });
+      })()}
     </section>
   );
 }

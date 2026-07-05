@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { useStore, store, bump, activeThread, newThread, closeSettings, openSettings, createCollection, deleteCollection, renameCollection, setCollectionLanguage, openLibrarySettings, closeLibrarySettings } from "./store";
+import { useStore, store, bump, activeThread, newThread, closeSettings, openSettings, createCollection, deleteCollection, renameCollection, setCollectionLanguage, openLibrarySettings, closeLibrarySettings, addRemoteLibrary, removeRemoteLibrary, renameRemoteLibrary, threadLibraryBadge, libraryLabel } from "./store";
+import { api } from "./trpc";
 import { Sidebar } from "./components/Sidebar";
 import { Chat } from "./components/Chat";
 import { Inspector } from "./components/Inspector";
@@ -34,16 +35,27 @@ function AppHeader({ environmentOpen, onToggleEnvironment }: { environmentOpen: 
   const working = !store.ready || !!store.ingest.text || !!thread?.busy;
   const title = thread?.title || "New chat";
   const status = store.statusErr ? store.status : store.ready ? store.status : "Connecting";
+  // Library context for this chat: the thread's used libraries once it has
+  // questions, else the active library the next question will use.
+  const libBadge = thread && thread.messages.length
+    ? threadLibraryBadge(thread)
+    : libraryLabel(store.activeCollection);
 
   return (
     <header className="app-drag window-header flex h-[46px] shrink-0 items-center border-b border-border">
       <div className={`flex h-full w-[300px] min-w-[300px] items-center border-r border-border bg-surface px-3 ${IS_MAC ? "pl-[106px]" : ""}`}>
         <span className="text-[12.5px] font-semibold text-ink">{APP_NAME}</span>
       </div>
-      <div className="flex min-w-0 flex-1 items-center px-5">
+      <div className="flex min-w-0 flex-1 items-center gap-2 px-5">
         <div className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-[14px] font-semibold text-ink">
           {title}
         </div>
+        {libBadge && (
+          <span
+            className="app-no-drag shrink-0 rounded-md border border-border bg-surface px-1.5 py-0.5 text-[11px] font-medium text-muted"
+            title="Library context for this chat"
+          >{libBadge}</span>
+        )}
       </div>
       <div className={`flex items-center justify-end gap-2 overflow-hidden pr-4 text-[11.5px] ${store.statusErr ? "text-danger" : "text-faint"}`}>
         {working && <HeaderSpinner />}
@@ -63,16 +75,39 @@ function AppHeader({ environmentOpen, onToggleEnvironment }: { environmentOpen: 
 }
 
 function LibraryDialog({ onClose }: { onClose: () => void }) {
+  const DEFAULT_REMOTE_URL = "http://localhost:8000";
+  const [mode, setMode] = useState<"local" | "remote">("local");
   const [name, setName] = useState("");
   const [language, setLanguage] = useState(DEFAULT_OCR_LANGUAGE);
+  const [url, setUrl] = useState(DEFAULT_REMOTE_URL);
+  const [secret, setSecret] = useState("");
+  const [remoteName, setRemoteName] = useState("");
   const [saving, setSaving] = useState(false);
+  const [test, setTest] = useState<{ ok: boolean; msg: string } | null>(null);
   const trimmed = name.trim();
+  const inputCls = "w-full rounded-lg border border-border-strong bg-surface px-3 py-2.5 text-[13px] text-ink outline-none transition focus:border-tint focus:ring-[3px] focus:ring-tint/15";
+  // A blank URL falls back to the local index server (main defaults it too).
+  const effectiveUrl = url.trim() || DEFAULT_REMOTE_URL;
+  const canSubmit = mode === "local" ? !!trimmed : !!trimmed;
+
+  const testConnection = async () => {
+    setTest(null);
+    const res = await api.testRemote({ url: effectiveUrl, secret });
+    if (!res.ok) { setTest({ ok: false, msg: res.error || "Could not connect." }); return; }
+    const parts: string[] = [];
+    if (typeof res.libraries === "number") parts.push(`${res.libraries} librar${res.libraries === 1 ? "y" : "ies"}`);
+    if (typeof res.documents === "number") parts.push(`${res.documents} document${res.documents === 1 ? "" : "s"}`);
+    setTest({ ok: true, msg: `Connected${parts.length ? ` · ${parts.join(" · ")} on server` : ""}` });
+  };
 
   const create = async () => {
-    if (!trimmed || saving) return;
+    if (!canSubmit || saving) return;
     setSaving(true);
     try {
-      if (await createCollection(trimmed, language)) onClose();
+      const ok = mode === "local"
+        ? await createCollection(trimmed, language)
+        : await addRemoteLibrary({ name: trimmed, url: effectiveUrl, secret, remoteName: remoteName.trim() || trimmed });
+      if (ok) onClose();
     } finally {
       setSaving(false);
     }
@@ -88,10 +123,23 @@ function LibraryDialog({ onClose }: { onClose: () => void }) {
         onSubmit={(e) => { e.preventDefault(); void create(); }}
       >
         <div className="text-[17px] font-semibold tracking-tight text-ink">New Library</div>
+
+        {/* Local vs remote toggle */}
+        <div className="mt-4 flex gap-1 rounded-lg border border-border-strong bg-surface p-1">
+          {(["local", "remote"] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => { setMode(m); setTest(null); }}
+              className={`flex-1 rounded-md px-3 py-1.5 text-[12.5px] font-medium capitalize transition ${mode === m ? "bg-bg text-ink shadow-[0_1px_2px_rgba(20,20,18,0.08)]" : "text-muted hover:text-ink"}`}
+            >{m}</button>
+          ))}
+        </div>
+
         <label className="mb-1.5 mt-4 block text-[12px] font-medium text-muted">Name</label>
         <input
           autoFocus
-          className="w-full rounded-lg border border-border-strong bg-surface px-3 py-2.5 text-[13px] text-ink outline-none transition focus:border-tint focus:ring-[3px] focus:ring-tint/15"
+          className={inputCls}
           type="text"
           autoComplete="off"
           spellCheck={false}
@@ -99,19 +147,69 @@ function LibraryDialog({ onClose }: { onClose: () => void }) {
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}
         />
-        <label className="mb-1.5 mt-4 block text-[12px] font-medium text-muted">Document language</label>
-        <select
-          className="w-full cursor-pointer rounded-lg border border-border-strong bg-surface px-3 py-2.5 text-[13px] text-ink outline-none transition focus:border-tint focus:ring-[3px] focus:ring-tint/15"
-          value={language}
-          onChange={(e) => setLanguage(e.target.value)}
-        >
-          {OCR_LANGUAGES.map((l) => (
-            <option key={l.code} value={l.code}>{l.label}</option>
-          ))}
-        </select>
-        <p className="mt-1.5 text-[11.5px] leading-snug text-faint">
-          Used to read scanned or image-only pages (OCR) in this library.
-        </p>
+
+        {mode === "local" ? (
+          <>
+            <label className="mb-1.5 mt-4 block text-[12px] font-medium text-muted">Document language</label>
+            <select
+              className={`${inputCls} cursor-pointer`}
+              value={language}
+              onChange={(e) => setLanguage(e.target.value)}
+            >
+              {OCR_LANGUAGES.map((l) => (
+                <option key={l.code} value={l.code}>{l.label}</option>
+              ))}
+            </select>
+            <p className="mt-1.5 text-[11.5px] leading-snug text-faint">
+              Used to read scanned or image-only pages (OCR) in this library.
+            </p>
+          </>
+        ) : (
+          <>
+            <label className="mb-1.5 mt-4 block text-[12px] font-medium text-muted">Server URL</label>
+            <input
+              className={inputCls}
+              type="text"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="http://localhost:8000"
+              value={url}
+              onChange={(e) => { setUrl(e.target.value); setTest(null); }}
+              onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}
+            />
+            <label className="mb-1.5 mt-4 block text-[12px] font-medium text-muted">Secret <span className="text-faint">(optional)</span></label>
+            <input
+              className={inputCls}
+              type="password"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="Leave empty for an open server"
+              value={secret}
+              onChange={(e) => { setSecret(e.target.value); setTest(null); }}
+            />
+            <label className="mb-1.5 mt-4 block text-[12px] font-medium text-muted">Library on server <span className="text-faint">(optional)</span></label>
+            <input
+              className={inputCls}
+              type="text"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="Defaults to the name above"
+              value={remoteName}
+              onChange={(e) => setRemoteName(e.target.value)}
+            />
+            <div className="mt-3 flex items-center gap-2">
+              <button
+                type="button"
+                className="rounded-lg border border-border-strong bg-bg px-3 py-1.5 text-[12px] font-medium text-ink transition hover:bg-surface-2 disabled:opacity-50"
+                onClick={() => void testConnection()}
+              >Test connection</button>
+              {test && (
+                <span className={`text-[11.5px] ${test.ok ? "text-tint" : "text-danger"}`}>{test.msg}</span>
+              )}
+            </div>
+          </>
+        )}
+
         <div className="mt-5 flex justify-end gap-2">
           <button
             className="rounded-lg border border-border-strong bg-bg px-4 py-2 text-[13px] font-medium text-ink transition hover:bg-surface-2"
@@ -121,8 +219,8 @@ function LibraryDialog({ onClose }: { onClose: () => void }) {
           <button
             className="rounded-lg border border-tint bg-tint px-4 py-2 text-[13px] font-medium text-white transition hover:opacity-90 disabled:opacity-50"
             type="submit"
-            disabled={!trimmed || saving}
-          >Create</button>
+            disabled={!canSubmit || saving}
+          >{mode === "remote" ? "Connect" : "Create"}</button>
         </div>
       </form>
     </div>
@@ -132,16 +230,28 @@ function LibraryDialog({ onClose }: { onClose: () => void }) {
 function LibrarySettingsDialog({ name, onClose }: { name: string; onClose: () => void }) {
   const isDefault = name === "default";
   const collection = store.collections.find((c) => c.name === name);
+  const isRemote = !!collection?.remote;
   const [newName, setNewName] = useState(name);
   const [busy, setBusy] = useState(false);
   const trimmed = newName.trim();
   const language = collection?.language || DEFAULT_OCR_LANGUAGE;
-  const canRename = !isDefault && !!trimmed && trimmed !== name && !busy;
 
-  const doRename = async () => {
-    if (!canRename) return;
-    setBusy(true);
-    try { await renameCollection(name, trimmed); } finally { setBusy(false); }
+  // Commit any pending rename, then close. Rename is applied on Done (there's no
+  // separate Rename button). On failure the dialog stays open so the status line
+  // reason is visible. Remote libraries rename their app-side label only; the
+  // server library is untouched.
+  const done = async () => {
+    if (busy) return;
+    if (!isDefault && trimmed && trimmed !== name) {
+      setBusy(true);
+      try {
+        const res = isRemote
+          ? await renameRemoteLibrary(name, trimmed)
+          : await renameCollection(name, trimmed);
+        if (!res) return;   // rename failed — keep the dialog open
+      } finally { setBusy(false); }
+    }
+    onClose();
   };
 
   return (
@@ -153,46 +263,54 @@ function LibrarySettingsDialog({ name, onClose }: { name: string; onClose: () =>
         <div className="text-[17px] font-semibold tracking-tight text-ink">Library settings</div>
 
         <label className="mb-1.5 mt-4 block text-[12px] font-medium text-muted">Name</label>
-        <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); void doRename(); }}>
-          <input
-            className="min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-3 py-2.5 text-[13px] text-ink outline-none transition focus:border-tint focus:ring-[3px] focus:ring-tint/15 disabled:opacity-60"
-            type="text"
-            autoComplete="off"
-            spellCheck={false}
-            disabled={isDefault}
-            value={isDefault ? "Default library" : newName}
-            onChange={(e) => setNewName(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}
-          />
-          <button
-            className="shrink-0 rounded-lg border border-border-strong bg-bg px-4 py-2 text-[13px] font-medium text-ink transition hover:bg-surface-2 disabled:opacity-50"
-            type="submit"
-            disabled={!canRename}
-          >Rename</button>
-        </form>
+        <input
+          className="w-full rounded-lg border border-border-strong bg-surface px-3 py-2.5 text-[13px] text-ink outline-none transition focus:border-tint focus:ring-[3px] focus:ring-tint/15 disabled:opacity-60"
+          type="text"
+          autoComplete="off"
+          spellCheck={false}
+          disabled={isDefault}
+          value={isDefault ? "Default library" : newName}
+          onChange={(e) => setNewName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") onClose();
+            if (e.key === "Enter") { e.preventDefault(); void done(); }
+          }}
+        />
         {isDefault && (
           <p className="mt-1.5 text-[11.5px] leading-snug text-faint">The Default library can’t be renamed.</p>
         )}
 
-        <label className="mb-1.5 mt-4 block text-[12px] font-medium text-muted">Document language</label>
-        <select
-          className="w-full cursor-pointer rounded-lg border border-border-strong bg-surface px-3 py-2.5 text-[13px] text-ink outline-none transition focus:border-tint focus:ring-[3px] focus:ring-tint/15"
-          value={language}
-          onChange={(e) => void setCollectionLanguage(name, e.target.value)}
-        >
-          {OCR_LANGUAGES.map((l) => (
-            <option key={l.code} value={l.code}>{l.label}</option>
-          ))}
-        </select>
-        <p className="mt-1.5 text-[11.5px] leading-snug text-faint">
-          Used to read scanned or image-only pages (OCR) in this library. Applies to PDFs added from now on.
-        </p>
+        {/* Remote libraries OCR at ingest on the connecting client, not the server,
+            so there's no per-library language to set here. */}
+        {!isRemote && (
+          <>
+            <label className="mb-1.5 mt-4 block text-[12px] font-medium text-muted">Document language</label>
+            <select
+              className="w-full cursor-pointer rounded-lg border border-border-strong bg-surface px-3 py-2.5 text-[13px] text-ink outline-none transition focus:border-tint focus:ring-[3px] focus:ring-tint/15"
+              value={language}
+              onChange={(e) => void setCollectionLanguage(name, e.target.value)}
+            >
+              {OCR_LANGUAGES.map((l) => (
+                <option key={l.code} value={l.code}>{l.label}</option>
+              ))}
+            </select>
+            <p className="mt-1.5 text-[11.5px] leading-snug text-faint">
+              Used to read scanned or image-only pages (OCR) in this library. Applies to PDFs added from now on.
+            </p>
+          </>
+        )}
+        {isRemote && (
+          <p className="mt-3 text-[11.5px] leading-snug text-faint">
+            Remote library on <span className="text-muted">{collection?.url}</span>. Its index lives on the server.
+          </p>
+        )}
 
         <div className="mt-5 flex justify-end">
           <button
-            className="rounded-lg border border-tint bg-tint px-4 py-2 text-[13px] font-medium text-white transition hover:opacity-90"
+            className="rounded-lg border border-tint bg-tint px-4 py-2 text-[13px] font-medium text-white transition hover:opacity-90 disabled:opacity-50"
             type="button"
-            onClick={onClose}
+            disabled={busy}
+            onClick={() => void done()}
           >Done</button>
         </div>
       </div>
@@ -224,6 +342,15 @@ export function App() {
         store.status = "The Default library can't be deleted.";
         store.statusErr = true;
         bump();
+        return;
+      }
+      const isRemote = store.collections.find((c) => c.name === name)?.remote;
+      if (isRemote) {
+        // A remote library is a saved connection, not on-disk data — "removing"
+        // it just disconnects the app; the server keeps the index.
+        if (window.confirm(`Disconnect the remote library "${name}"? The index stays on the server; switches back to Default.`)) {
+          void removeRemoteLibrary(name);
+        }
         return;
       }
       if (window.confirm(`Delete the "${name}" library and its index? Switches back to Default.`)) {

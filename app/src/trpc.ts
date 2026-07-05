@@ -49,11 +49,16 @@ export interface RouterDeps {
   showThreadMenu: (input: { title: string; messages: unknown[]; markdown: string; filename: string }) => Promise<void>;
   showModelMenu: (input: { models: ModelMenuItem[]; selectedModel: string }) => Promise<string | null>;
   setCollection: (name: string) => string;   // switch active collection (respawns backend)
-  listCollections: () => { name: string; docs: number; active: boolean; language: string }[];
+  listCollections: () => { name: string; docs: number; active: boolean; language: string; remote: boolean; url?: string }[];
   createCollection: (name: string, language: string) => { ok: boolean; name?: string; error?: string };
   deleteCollection: (name: string) => { ok: boolean; error?: string };
   renameCollection: (input: { name: string; newName: string }) => { ok: boolean; name?: string; error?: string };
   setCollectionLanguage: (input: { name: string; language: string }) => { ok: boolean; error?: string };
+  // Remote libraries: a shared index server the app connects to (index_server/).
+  addRemoteLibrary: (input: { name: string; url: string; secret: string; remoteName?: string }) => Promise<{ ok: boolean; name?: string; error?: string }>;
+  removeRemoteLibrary: (name: string) => { ok: boolean; error?: string };
+  renameRemoteLibrary: (input: { name: string; newName: string }) => { ok: boolean; name?: string; error?: string };
+  testRemote: (input: { url: string; secret: string }) => Promise<{ ok: boolean; error?: string; libraries?: number; documents?: number }>;
   readImage: (filePath: string) => string;    // page image -> data URL (guarded to dataDir)
   getUpdateState: () => UpdateState | null;   // current update state for late subscribers
   installUpdate: () => boolean;               // quit + install; false = dev no-op
@@ -126,6 +131,16 @@ export function createAppRouter(deps: RouterDeps) {
     setCollectionLanguage: t.procedure
       .input(z.object({ name: z.string(), language: z.string() }))
       .mutation(({ input }) => deps.setCollectionLanguage(input)),
+    addRemoteLibrary: t.procedure
+      .input(z.object({ name: z.string(), url: z.string(), secret: z.string().default(""), remoteName: z.string().optional() }))
+      .mutation(({ input }) => deps.addRemoteLibrary(input)),
+    removeRemoteLibrary: t.procedure.input(z.string()).mutation(({ input }) => deps.removeRemoteLibrary(input)),
+    renameRemoteLibrary: t.procedure
+      .input(z.object({ name: z.string(), newName: z.string() }))
+      .mutation(({ input }) => deps.renameRemoteLibrary(input)),
+    testRemote: t.procedure
+      .input(z.object({ url: z.string(), secret: z.string().default("") }))
+      .mutation(({ input }) => deps.testRemote(input)),
     readImage: t.procedure.input(z.string()).query(({ input }) => deps.readImage(input)),
     installUpdate: t.procedure.mutation(() => deps.installUpdate()),
     track: t.procedure.input(z.object({

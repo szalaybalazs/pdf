@@ -1,5 +1,5 @@
 import React from "react";
-import { store, activeThread } from "../store";
+import { store, activeThread, libraryLabel } from "../store";
 import { api } from "../trpc";
 import type { AssistantMsg } from "../types";
 import { SEP } from "../platform";
@@ -68,6 +68,11 @@ export function Inspector({ onClose }: { onClose: () => void }) {
         </div>
 
           <div className="mb-4">
+            <CardRow
+              label="Library"
+              value={libraryLabel(store.activeCollection)
+                + (store.collections.find((c) => c.name === store.activeCollection)?.remote ? " · remote" : "")}
+            />
             <CardRow label="Documents" value={String(store.docs.length)} />
             <CardRow label="References" value={String(sources.length)} />
             <CardRow label="Calculations" value={String(calcs.length)} />

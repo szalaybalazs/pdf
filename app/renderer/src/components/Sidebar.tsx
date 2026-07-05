@@ -4,7 +4,7 @@ import {
   setSearchQuery, addPdfs, openDoc, showDocMenu, openSettings,
   docEnabled, enabledDocs, setDocEnabled, threadDocs,
   installUpdate, showThreadMenu, ingestFiles,
-  switchCollection, openLibrarySettings,
+  switchCollection, openLibrarySettings, threadLibraries, libraryLabel,
 } from "../store";
 import type { Thread } from "../types";
 import { SEP } from "../platform";
@@ -247,6 +247,7 @@ export function Sidebar() {
   const working = !store.ready || !!store.ingest.text || !!activeThread()?.busy;
   const docs = threadDocs();
   const enabledCount = enabledDocs().length;
+  const showStatus = working || store.statusErr;
 
   return (
     <aside className="relative z-30 flex min-h-0 w-[300px] min-w-[300px] shrink-0 flex-col border-r border-border bg-surface px-3 pb-3 pt-3">
@@ -280,6 +281,12 @@ export function Sidebar() {
             {group.threads.map((t) => {
               const active = t.id === store.activeId;
               const threadedOff = !!t.branchedFromThreadId || /\s↳ branch$/.test(t.title);
+              // Badge only threads that touched a non-default library (named or
+              // remote) — badging every thread "Default library" would be noise.
+              const notable = threadLibraries(t).filter((l) => l !== "default");
+              const libBadge = notable.length === 0 ? ""
+                : notable.length === 1 ? libraryLabel(notable[0])
+                : `${libraryLabel(notable[0])} +${notable.length - 1}`;
               return (
                 <li
                   key={t.id}
@@ -294,6 +301,12 @@ export function Sidebar() {
                     </span>
                   )}
                   <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{t.title}</span>
+                  {libBadge && (
+                    <span
+                      className="shrink-0 max-w-[92px] overflow-hidden text-ellipsis whitespace-nowrap rounded border border-border px-1 py-px text-[10px] text-faint group-hover:hidden"
+                      title={`Library context: ${libBadge}`}
+                    >{libBadge}</span>
+                  )}
                   <button
                     className="flex h-[20px] w-[20px] items-center justify-center rounded text-faint opacity-0 transition-opacity hover:!text-danger hover:bg-surface-2 group-hover:opacity-70"
                     title="Delete chat"
@@ -323,11 +336,20 @@ export function Sidebar() {
             value={store.activeCollection}
             onChange={(e) => switchCollection(e.target.value)}
           >
-            {store.collections.map((c) => (
-              <option key={c.name} value={c.name}>
-                {c.name === "default" ? "Default library" : c.name} ({c.docs})
-              </option>
-            ))}
+            {store.collections.map((c) => {
+              // Remote libraries don't carry a doc count in the list (it would
+              // need a network call per entry); show the live count when active,
+              // otherwise "remote". Local libraries show their on-disk count.
+              const label = c.name === "default" ? "Default library" : c.name;
+              const count = c.remote
+                ? (c.active ? String(store.docs.length) : "remote")
+                : String(c.docs);
+              return (
+                <option key={c.name} value={c.name}>
+                  {label} ({count})
+                </option>
+              );
+            })}
           </select>
         )}
         {store.collections.length === 0 && (
@@ -397,10 +419,12 @@ export function Sidebar() {
 
       <IngestProgress />
 
-      <div className={`mt-1.5 flex items-center gap-2 border-t border-border px-2 pt-2.5 font-mono text-[10.5px] ${store.statusErr ? "text-danger" : "text-faint"}`}>
-        {working && <SidebarSpinner />}
-        <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{store.status}</span>
-      </div>
+      {showStatus && (
+        <div className={`mt-1.5 flex items-center gap-2 px-2 pt-2.5 font-mono text-[10.5px] ${store.statusErr ? "text-danger" : "text-faint"}`}>
+          {working && <SidebarSpinner />}
+          <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{store.status}</span>
+        </div>
+      )}
 
       <UpdateBanner />
 

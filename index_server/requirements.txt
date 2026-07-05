@@ -1,0 +1,5 @@
+# Runtime deps for the remote index server only (NOT the desktop backend).
+# Deliberately tiny: the server reuses pdf_qa.store, which needs just numpy.
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+numpy>=1.24.0

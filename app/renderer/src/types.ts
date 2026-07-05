@@ -25,7 +25,7 @@ export interface ReadyEvent {
   type: "ready"; docs: string[]; chunks: number; vision_model: string; embed_model: string;
   models?: ModelOption[]; default_model?: string; collection?: string;
 }
-export interface Collection { name: string; docs: number; active: boolean; language: string; }
+export interface Collection { name: string; docs: number; active: boolean; language: string; remote?: boolean; url?: string; }
 export interface PageImageEvent { type: "page_image"; reqId?: string; doc: string; page: number; label: string; path: string | null; }
 // In-app page viewer: which page is shown and its (data-URL) image.
 export interface ViewerState { doc: string; page: number; label: string; imageUrl: string; loading: boolean; }
@@ -60,11 +60,14 @@ export interface AssistantMsg {
   topScore?: number;        // best cosine similarity behind `confidence`
   latency?: number;      // seconds the backend took to generate this reply
   model?: string;        // concrete answerer model that produced this reply
+  library?: string;      // library (collection) this question was asked in
+  remote?: boolean;      // whether that library is a remote (shared-server) one
+  libraryUrl?: string;   // remote server URL (for the chip tooltip), if remote
   sessionId?: string;    // backend session id that produced this reply (debugging)
   streaming?: boolean;   // currently receiving deltas
   error?: string; done: boolean;
 }
-export interface UserMsg { kind: "user"; text: string; }
+export interface UserMsg { kind: "user"; text: string; library?: string; }
 export type Msg = UserMsg | AssistantMsg;
 
 export interface Thread {

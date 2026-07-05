@@ -570,6 +570,94 @@ def watch_dir(pdf_dir: Path | None = None, interval: float = 10.0, **kwargs) -> 
         return 0
 
 
+def push_local_index_to_remote(local_index_dir: Path, json_out: bool = False) -> dict:
+    """Upload a freshly-built LOCAL index (store + page images + manifest) to the
+    active remote library (config.REMOTE_URL). Used for "Add PDFs" when the active
+    library is remote: ingest renders + embeds into a local temp dir with all the
+    usual machinery, then this pushes the result to the shared server.
+
+    Per document it REPLACES on the server (remove_doc then add), so re-adding a
+    file that's already there updates rather than duplicates it. Page images are
+    uploaded, and the server manifest is merged so other apps can skip-unchanged.
+    Returns {added, docs}."""
+    from .remote_store import RemoteVectorStore
+    import numpy as np
+
+    local_index_dir = Path(local_index_dir)
+    store = VectorStore.load(local_index_dir / "store")
+    remote = RemoteVectorStore.connect(config.REMOTE_URL, config.REMOTE_SECRET,
+                                       config.REMOTE_LIBRARY, config.REMOTE_CACHE_DIR)
+
+    # Which embedder built this local index (so the server records/checks it).
+    try:
+        embedder = _json_load(local_index_dir / "embedder.json").get("embedder", "")
+    except Exception:
+        embedder = ""
+
+    # Group chunks (and their aligned vectors) by document.
+    by_doc: dict[str, list[int]] = {}
+    for i, c in enumerate(store.chunks):
+        by_doc.setdefault(c.doc, []).append(i)
+    docs = sorted(by_doc)
+    if json_out:
+        _emit_json({"type": "push_start", "total": len(docs), "library": config.REMOTE_LIBRARY})
+
+    added = 0
+    for di, doc in enumerate(docs):
+        idxs = by_doc[doc]
+        chunks = [store.chunks[i] for i in idxs]
+        vecs = (store.vectors[idxs] if store.vectors is not None
+                else np.zeros((len(idxs), 1), dtype="float32"))
+        if json_out:
+            _emit_json({"type": "push_doc", "name": doc, "index": di + 1, "total": len(docs)})
+        # Replace semantics: drop any existing copy on the server, then add.
+        try:
+            remote.remove_doc(doc)
+        except Exception:
+            pass
+        remote.add(chunks, vecs, embedder=embedder)
+        # Upload this doc's rendered page images.
+        safe = Path(doc).stem.replace(" ", "_")
+        pages_dir = local_index_dir / "pages" / safe
+        if pages_dir.exists():
+            for png in sorted(pages_dir.glob("*.png")):
+                try:
+                    remote.upload_page(f"{safe}/{png.name}", png.read_bytes())
+                except Exception as e:  # noqa: BLE001
+                    capture_exception(e)
+        # Upload the original PDF (if the app copied it into sources/) so the
+        # highlight overlay works for every app connected to this library.
+        src_pdf = local_index_dir / "sources" / doc
+        if src_pdf.exists():
+            try:
+                remote.upload_source(doc, src_pdf.read_bytes())
+            except Exception as e:  # noqa: BLE001
+                capture_exception(e)
+        added += 1
+
+    # Merge the local manifest into the server's so a later add from any app can
+    # skip unchanged files.
+    try:
+        local_manifest = _json_load(local_index_dir / "manifest.json")
+        if local_manifest:
+            server_manifest = remote.get_manifest()
+            server_manifest.update(local_manifest)
+            remote.put_manifest(server_manifest)
+    except Exception as e:  # noqa: BLE001
+        capture_exception(e)
+
+    if json_out:
+        _emit_json({"type": "push_done", "added": added, "docs": docs})
+    else:
+        print(f"Pushed {added} document(s) to remote library '{config.REMOTE_LIBRARY}'.")
+    return {"added": added, "docs": docs}
+
+
+def _json_load(path: Path) -> dict:
+    import json as _json
+    return _json.loads(Path(path).read_text(encoding="utf-8"))
+
+
 def main(argv=None):
     # Idempotent; covers the dev path where the app runs `python -m pdf_qa.ingest`.
     init_error_reporting()
@@ -577,6 +665,10 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Index PDFs for multimodal Q&A.")
     ap.add_argument("--add", nargs="+", metavar="PDF",
                     help="Incrementally add these PDF path(s) to the existing index.")
+    ap.add_argument("--push-remote", metavar="LOCAL_INDEX_DIR",
+                    help="Upload a locally-built index dir to the active remote "
+                         "library (config.REMOTE_URL). Used after ingesting into a "
+                         "temp dir when the active library is remote.")
     ap.add_argument("--sync", action="store_true",
                     help="Mirror PDF_DIR into the index: ingest new/changed PDFs "
                          "(by content hash), skip unchanged, prune deleted.")
@@ -600,6 +692,19 @@ def main(argv=None):
                     help=f"Documents to ingest concurrently (default {config.INGEST_DOC_WORKERS}); "
                          "the --workers page budget is split across them.")
     args = ap.parse_args(argv)
+
+    # Push a locally-built index up to the active remote library.
+    if args.push_remote:
+        try:
+            push_local_index_to_remote(Path(args.push_remote), json_out=args.json)
+            return 0
+        except Exception as e:  # noqa: BLE001
+            capture_exception(e)
+            if args.json:
+                _emit_json({"type": "ingest_error", "message": str(e)})
+            else:
+                print(f"Push failed: {e}", file=sys.stderr)
+            return 1
 
     # Watch mode: poll PDF_DIR and sync on change (runs until interrupted).
     if args.watch is not None:

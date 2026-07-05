@@ -32,6 +32,10 @@ export const api = {
   deleteCollection: (name: string) => trpc.deleteCollection.mutate(name),
   renameCollection: (name: string, newName: string) => trpc.renameCollection.mutate({ name, newName }),
   setCollectionLanguage: (name: string, language: string) => trpc.setCollectionLanguage.mutate({ name, language }),
+  addRemoteLibrary: (input: { name: string; url: string; secret: string; remoteName?: string }) => trpc.addRemoteLibrary.mutate(input),
+  removeRemoteLibrary: (name: string) => trpc.removeRemoteLibrary.mutate(name),
+  renameRemoteLibrary: (name: string, newName: string) => trpc.renameRemoteLibrary.mutate({ name, newName }),
+  testRemote: (input: { url: string; secret: string }) => trpc.testRemote.mutate(input),
   readImage: (filePath: string): Promise<string> => trpc.readImage.query(filePath),
   getSettings: () => trpc.getSettings.query(),
   setSettings: (s: {

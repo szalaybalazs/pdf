@@ -307,8 +307,24 @@ export function send(question: string): void {
 
   const reqId = uid();
   touchThread(t);
-  t.messages.push({ kind: "user", text: question });
-  t.messages.push({ kind: "assistant", reqId, trace: [], done: false });
+  // Stamp the library this question is asked in (the active library at send time
+  // is exactly the context the backend will retrieve from — it can't switch
+  // mid-request). Recorded per message so a thread that spans libraries is
+  // faithfully represented.
+  const library = store.activeCollection;
+  const coll = store.collections.find((c) => c.name === library);
+  // Stamp the model we're asking with, so the footer shows the right model while
+  // the answer streams (before the backend reports the actual one it used, which
+  // then overwrites this). Without it the footer would fall back to the default
+  // vision model and mislabel every in-flight answer.
+  const picked = store.models.find((m) => m.id === store.selectedModel);
+  const intendedModel = picked?.model || picked?.label || undefined;
+  t.messages.push({ kind: "user", text: question, library });
+  t.messages.push({
+    kind: "assistant", reqId, trace: [], done: false,
+    library, remote: !!coll?.remote, libraryUrl: coll?.url,
+    model: intendedModel,
+  });
   t.busy = true;
   reqToThread.set(reqId, t.id);
 
@@ -423,6 +439,30 @@ export async function refreshCollections(): Promise<void> {
   }
 }
 
+// Display label for a library id (the "default" collection reads nicer spelled out).
+export function libraryLabel(name?: string): string {
+  return !name ? "" : name === "default" ? "Default library" : name;
+}
+
+// Distinct libraries a thread's questions were asked in, in first-seen order.
+export function threadLibraries(t: Thread): string[] {
+  const seen: string[] = [];
+  for (const m of t.messages) {
+    const lib = (m as { library?: string }).library;
+    if (lib && !seen.includes(lib)) seen.push(lib);
+  }
+  return seen;
+}
+
+// Compact badge for a thread's library context: "" when nothing's been asked
+// yet, the single library's label, or "First +N" when the thread spans several.
+export function threadLibraryBadge(t: Thread): string {
+  const libs = threadLibraries(t);
+  if (libs.length === 0) return "";
+  if (libs.length === 1) return libraryLabel(libs[0]);
+  return `${libraryLabel(libs[0])} +${libs.length - 1}`;
+}
+
 export function switchCollection(name: string): void {
   if (!name || name === store.activeCollection) return;
   store.status = `switching to ${name === "default" ? "Default library" : name}…`;
@@ -492,6 +532,48 @@ export async function deleteCollection(name: string): Promise<void> {
   if (!res.ok) { store.status = res.error || "Could not delete library."; store.statusErr = true; bump(); }
   // If the deleted library was active the backend respawns (ready refreshes);
   // otherwise refresh the list in place.
+  if (store.ready) void refreshCollections();
+}
+
+// Add a remote library: the main process tests the connection, persists it, and
+// switches to it (respawning the backend pointed at the server). Returns true on
+// success; on failure the status line carries the reason.
+export async function addRemoteLibrary(input: { name: string; url: string; secret: string; remoteName?: string }): Promise<boolean> {
+  const clean = input.name.trim();
+  if (!clean || !input.url.trim()) return false;
+  const res = await api.addRemoteLibrary({ ...input, name: clean, url: input.url.trim() });
+  if (!res.ok) {
+    store.status = res.error || "Could not add remote library."; store.statusErr = true; bump();
+    return false;
+  }
+  store.status = `connecting to ${res.name}…`; store.statusErr = false; store.ready = false; bump();
+  return true;
+}
+
+// Rename a remote library's app-side label (the server library is untouched).
+// Returns the new name on success, or null on failure (status carries the why).
+export async function renameRemoteLibrary(name: string, newName: string): Promise<string | null> {
+  const clean = newName.trim();
+  if (!clean || clean === name) return clean === name ? name : null;
+  const isActive = name === store.activeCollection;
+  const res = await api.renameRemoteLibrary(name, clean);
+  if (!res.ok || !res.name) {
+    store.status = res.error || "Could not rename library."; store.statusErr = true; bump();
+    return null;
+  }
+  if (store.librarySettings === name) store.librarySettings = res.name;
+  if (isActive) {
+    store.status = `opening ${res.name}…`; store.statusErr = false; store.ready = false; bump();
+  } else {
+    void refreshCollections();
+  }
+  return res.name;
+}
+
+// Remove (disconnect) a remote library from the app. Does not touch the server.
+export async function removeRemoteLibrary(name: string): Promise<void> {
+  const res = await api.removeRemoteLibrary(name);
+  if (!res.ok) { store.status = res.error || "Could not remove remote library."; store.statusErr = true; bump(); }
   if (store.ready) void refreshCollections();
 }
 

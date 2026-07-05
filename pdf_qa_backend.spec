@@ -39,6 +39,8 @@ hiddenimports += [
     "pdf_qa.ask",
     "pdf_qa.llm",
     "pdf_qa.store",
+    "pdf_qa.store_backend",
+    "pdf_qa.remote_store",
     "pdf_qa.threads",
     "pdf_qa.config",
     "pdf_qa.calc",

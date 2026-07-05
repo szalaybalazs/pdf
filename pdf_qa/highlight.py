@@ -66,7 +66,17 @@ def _phrases(snippet: str, words: int = 6, max_phrases: int = 8) -> list[str]:
 
 def _source_pdf(doc_name: str) -> Path | None:
     p = config.PDF_DIR / doc_name
-    return p if p.exists() else None
+    if p.exists():
+        return p
+    # Remote library: the original PDF was uploaded to the server at ingest, so
+    # fetch it (cached locally) to render the highlight overlay. None when the
+    # server doesn't have it — the caller then keeps the plain page.
+    if config.IS_REMOTE:
+        from .remote_store import cache_source
+        local = cache_source(doc_name)
+        if local and Path(local).exists():
+            return Path(local)
+    return None
 
 
 def annotate_page(doc_name: str, page_no: int, query: str = "", snippet: str = "") -> str | None:

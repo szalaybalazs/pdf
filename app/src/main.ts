@@ -679,9 +679,10 @@ function createWindow(): void {
     show: false,
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 13, y: 13 },
-    vibrancy: process.platform === "darwin" ? "under-window" : undefined,
+    transparent: process.platform === "darwin",
+    vibrancy: process.platform === "darwin" ? "sidebar" : undefined,
     visualEffectState: "active",
-    backgroundColor: "#fbfbfa",
+    backgroundColor: process.platform === "darwin" ? "#00000000" : "#171717",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,

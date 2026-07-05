@@ -11,20 +11,20 @@
 @source "./src";
 
 @theme {
-  --color-bg: #ffffff;
-  --color-surface: #f7f7f8;
-  --color-surface-2: #ececf1;
-  --color-surface-3: #e3e3e8;
-  --color-border: #e7e7ea;
-  --color-border-strong: #d5d5da;
-  --color-ink: #202123;        /* primary text + near-black accent */
-  --color-muted: #6e6e73;
-  --color-faint: #a1a1a8;
-  --color-tint: #10a37f;       /* quiet ChatGPT green */
-  --color-tint-soft: #eef8f4;
-  --color-tint-strong: #0e8065;
-  --color-danger: #c0392b;
-  --color-amber: #b9821a;
+  --color-bg: #171717;
+  --color-surface: #3f3f3f;
+  --color-surface-2: #2f2f2f;
+  --color-surface-3: #242424;
+  --color-border: #2d2d2d;
+  --color-border-strong: #4b4b4b;
+  --color-ink: #f4f4f4;
+  --color-muted: #c9c9c9;
+  --color-faint: #8f8f8f;
+  --color-tint: #10a37f;
+  --color-tint-soft: #183b34;
+  --color-tint-strong: #24c49c;
+  --color-danger: #ff8a80;
+  --color-amber: #e7b75a;
 
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Inter,
     "Helvetica Neue", Arial, sans-serif;
@@ -33,29 +33,29 @@
 }
 
 @layer base {
-  :root { color-scheme: light; }
+  :root { color-scheme: dark; }
   @media (prefers-color-scheme: dark) {
     :root {
       color-scheme: dark;
       --color-bg: #171717;
-      --color-surface: #202123;
-      --color-surface-2: #2b2c2f;
-      --color-surface-3: #3a3b3f;
-      --color-border: #303136;
-      --color-border-strong: #46474d;
-      --color-ink: #f2f2f0;
-      --color-muted: #b4b4bb;
-      --color-faint: #85858e;
-      --color-tint: #19c89a;
-      --color-tint-soft: #12382f;
-      --color-tint-strong: #6ee7c4;
-      --color-danger: #ff8a7a;
-      --color-amber: #f3bd5b;
+      --color-surface: #3f3f3f;
+      --color-surface-2: #303030;
+      --color-surface-3: #252525;
+      --color-border: #2b2b2b;
+      --color-border-strong: #4a4a4a;
+      --color-ink: #eeeeee;
+      --color-muted: #c5c5c5;
+      --color-faint: #909096;
+      --color-tint: #10a37f;
+      --color-tint-soft: #183b34;
+      --color-tint-strong: #24c49c;
+      --color-danger: #ff8a80;
+      --color-amber: #e7b75a;
     }
   }
   html, body { height: 100%; margin: 0; }
   body {
-    background: var(--color-bg); color: var(--color-ink);
+    background: transparent; color: var(--color-ink);
     font-family: var(--font-sans); font-size: 14px;
     -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
   }
@@ -68,17 +68,36 @@
 .app-drag { -webkit-app-region: drag; }
 .app-no-drag { -webkit-app-region: no-drag; }
 .window-header {
-  background: color-mix(in srgb, var(--color-surface) 88%, transparent);
-  backdrop-filter: saturate(180%) blur(18px);
-  -webkit-backdrop-filter: saturate(180%) blur(18px);
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 .composer-shell {
-  box-shadow: 0 1px 2px rgba(20, 20, 18, .04), 0 14px 42px rgba(20, 20, 18, .08);
+  background: #2f2f2f;
+  border-color: #444;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .18);
 }
-.modal-scrim { background: rgba(20, 20, 18, .30); }
+.app-shell {
+  background: transparent;
+}
+.sidebar-chrome {
+  position: relative;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: none;
+}
+.sidebar-chrome > * {
+  position: relative;
+  z-index: 1;
+}
+.main-chrome {
+  background: #171717;
+}
+.modal-scrim { background: rgba(0, 0, 0, .52); }
 @media (prefers-color-scheme: dark) {
   .composer-shell {
-    box-shadow: 0 1px 2px rgba(0, 0, 0, .28), 0 14px 42px rgba(0, 0, 0, .34);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, .16);
   }
   .modal-scrim { background: rgba(0, 0, 0, .48); }
 }
@@ -90,7 +109,7 @@
 
 /* --- tool-call trace ------------------------------------------------------- */
 .trace {
-  font-family: var(--font-mono); font-size: 12px; background: var(--color-surface);
+  font-family: var(--font-mono); font-size: 12px; background: var(--color-surface-3);
   border: 1px solid var(--color-border); border-radius: 12px; padding: 10px 12px; margin-bottom: 16px;
 }
 .trace-row { padding: 2px 0; color: var(--color-ink); }
@@ -101,7 +120,7 @@
 .trace-detail.debug { color: var(--color-faint); }
 
 /* --- thinking panel -------------------------------------------------------- */
-.thinking { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 12px; padding: 4px 14px; margin-bottom: 16px; }
+.thinking { background: var(--color-surface-3); border: 1px solid var(--color-border); border-radius: 12px; padding: 4px 14px; margin-bottom: 16px; }
 .thinking summary {
   cursor: pointer; font-size: 13px; color: var(--color-muted); font-weight: 500;
   padding: 8px 0; user-select: none; list-style: none; display: flex; align-items: center; gap: 8px;
@@ -121,14 +140,14 @@
 }
 
 /* --- answer (markdown, injected as HTML) ----------------------------------- */
-.answer { line-height: 1.68; font-size: 15.5px; color: var(--color-ink); }
-.answer p { margin: 0 0 15px; }
-.answer h1, .answer h2, .answer h3, .answer h4 { margin: 24px 0 12px; line-height: 1.3; font-weight: 650; letter-spacing: -0.01em; }
+.answer { line-height: 1.62; font-size: 14.5px; color: var(--color-ink); }
+.answer p { margin: 0 0 13px; }
+.answer h1, .answer h2, .answer h3, .answer h4 { margin: 21px 0 10px; line-height: 1.28; font-weight: 650; letter-spacing: 0; }
 .answer h1 { font-size: 1.45em; } .answer h2 { font-size: 1.25em; } .answer h3 { font-size: 1.1em; }
 .answer ul, .answer ol { margin: 8px 0 15px; padding-left: 22px; }
 .answer li { margin: 4px 0; }
 .answer code { font-family: var(--font-mono); font-size: 0.86em; background: var(--color-surface-2); border: 1px solid var(--color-border); border-radius: 5px; padding: 1px 5px; }
-.answer pre { background: #1b1b19; color: #f3f3f0; border-radius: 10px; padding: 16px; overflow-x: auto; margin: 16px 0; }
+.answer pre { background: #0f0f0f; color: #f3f3f0; border-radius: 10px; padding: 16px; overflow-x: auto; margin: 16px 0; }
 .answer pre code { background: none; border: none; padding: 0; color: inherit; font-size: 13px; }
 .answer blockquote { margin: 16px 0; padding: 6px 16px; border-left: 3px solid var(--color-border-strong); color: var(--color-muted); }
 .answer table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 13.5px; }

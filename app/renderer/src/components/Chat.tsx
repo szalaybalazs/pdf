@@ -83,12 +83,6 @@ function Messages() {
   if (!t || t.messages.length === 0) {
     return (
       <section ref={scrollerRef} onScroll={onScroll} style={scrollerStyle} className="min-h-0 flex-1 overflow-y-auto px-0 py-8">
-        <div className="mx-auto mt-[18vh] flex flex-col items-center px-6">
-          <div className="text-[28px] font-semibold text-ink">What can I help with?</div>
-          <div className="mt-3 max-w-[460px] text-center text-[14px] leading-relaxed text-faint">
-            Ask a question about your indexed PDFs. Figures in answers are underlined — click to open the page.
-          </div>
-        </div>
       </section>
     );
   }
@@ -105,7 +99,7 @@ function Messages() {
         let prevLib: string | undefined;
         let prevModel: string | undefined;
         const divider = (text: string, key: string) => (
-          <div className="mx-auto my-4 flex max-w-[780px] items-center gap-3 px-8 text-[11.5px] text-faint" key={key}>
+          <div className="mx-auto my-4 flex max-w-[920px] items-center gap-3 px-8 text-[11.5px] text-faint" key={key}>
             <div className="h-px flex-1 bg-border" />
             <span className="whitespace-nowrap">{text}</span>
             <div className="h-px flex-1 bg-border" />
@@ -125,7 +119,7 @@ function Messages() {
             prevModel = m.model;
           }
           const body = m.kind === "user" ? (
-            <div className="mx-auto mb-6 flex max-w-[780px] flex-col items-end px-8" key={i}>
+            <div className="mx-auto mb-6 flex max-w-[920px] flex-col items-end px-8" key={i}>
               <div className="max-w-[82%] whitespace-pre-wrap rounded-[20px] bg-surface-2 px-4 py-2.5 text-[15px] leading-relaxed text-ink shadow-[0_1px_1px_rgba(20,20,18,0.03)]">{m.text}</div>
             </div>
           ) : (
@@ -138,7 +132,7 @@ function Messages() {
   );
 }
 
-function Composer() {
+function Composer({ centered = false }: { centered?: boolean }) {
   const [value, setValue] = useState("");
   const ref = useRef<HTMLTextAreaElement>(null);
   const t = activeThread();
@@ -166,53 +160,54 @@ function Composer() {
   };
 
   return (
-    <footer className="shrink-0 border-t border-transparent bg-bg px-7 pb-4 pt-2">
+    <footer className={centered ? "w-full px-6" : "shrink-0 bg-bg px-7 pb-5 pt-2"}>
       <div className="flex flex-col items-center">
-      <div className="composer-shell flex w-full max-w-[780px] items-end gap-2.5 rounded-[24px] border border-border bg-bg py-2 pl-[18px] pr-2 transition focus-within:border-border-strong focus-within:shadow-[0_12px_36px_rgba(20,20,18,0.12)]">
-        <textarea
-          ref={ref} rows={1} placeholder={`Message ${APP_NAME}`}
-          className="max-h-[180px] flex-1 resize-none border-none bg-transparent py-2.5 text-[15px] leading-normal text-ink outline-none placeholder:text-faint"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); } }}
-          disabled={noDocsEnabled}
-        />
-        <button
-          className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full bg-tint text-white transition hover:opacity-85 active:scale-95 disabled:cursor-not-allowed disabled:bg-surface-3 disabled:text-faint"
-          onClick={submit} disabled={busy || noDocsEnabled || !value.trim()} title={noDocsEnabled ? "Enable at least one document" : "Send"}
-        >
-          {busy ? (
-            <span className="h-[15px] w-[15px] animate-spin rounded-full border-2 border-white/35 border-t-white" />
-          ) : (
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline>
-            </svg>
-          )}
-        </button>
-      </div>
+        <div className="composer-shell flex min-h-[96px] w-full max-w-[920px] flex-col rounded-[24px] border px-4.5 pb-2.5 pt-3.5 transition focus-within:border-border-strong">
+          <div className="flex flex-1 items-start">
+            <textarea
+              ref={ref} rows={1} placeholder="Ask anything"
+              className="max-h-[160px] min-h-[42px] flex-1 resize-none border-none bg-transparent py-0 text-[15px] leading-normal text-ink outline-none placeholder:text-faint"
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); } }}
+              disabled={noDocsEnabled}
+            />
+          </div>
 
-      {/* controls under the input: model / debug / session tokens */}
-      <div className="mt-2 flex w-full max-w-[780px] flex-wrap items-center gap-3">
-        <button
-          className="max-w-full cursor-pointer truncate px-0 py-1 text-left font-mono text-[12px] text-muted outline-none transition hover:text-ink focus:text-ink disabled:cursor-default disabled:opacity-60"
-          title="Answer model"
-          disabled={!store.models.length}
-          onClick={() => { void showModelMenu(); }}
-        >
-          {selectedModelLabel || "Model"}
-        </button>
-        <span className="flex-1" />
-        {docCount > 0 && (
-          <span className={`font-mono text-[11.5px] ${noDocsEnabled ? "text-danger" : "text-faint"}`} title="Documents searched by this chat">
-            {enabledDocCount}/{docCount} docs
-          </span>
-        )}
-        {tok.total > 0 && (
-          <span className="ml-auto font-mono text-[11.5px] text-faint" title="Tokens used this session">
-            {tok.total.toLocaleString()} tok ({tok.prompt.toLocaleString()} in / {tok.completion.toLocaleString()} out){SEP}{tok.queries} q
-          </span>
-        )}
-      </div>
+          <div className="mt-2 flex min-h-[30px] flex-wrap items-center gap-3">
+            <button
+              className="max-w-full cursor-pointer truncate px-0 py-0.5 text-left font-mono text-[12px] text-muted outline-none transition hover:text-ink focus:text-ink disabled:cursor-default disabled:opacity-60"
+              title="Answer model"
+              disabled={!store.models.length}
+              onClick={() => { void showModelMenu(); }}
+            >
+              {selectedModelLabel || "Model"}
+            </button>
+            <span className="flex-1" />
+            {tok.total > 0 && (
+              <span className="font-mono text-[11px] text-faint" title="Tokens used this session">
+                {tok.total.toLocaleString()} tok ({tok.prompt.toLocaleString()} in / {tok.completion.toLocaleString()} out){SEP}{tok.queries} q
+              </span>
+            )}
+            {docCount > 0 && (
+              <span className={`font-mono text-[11px] ${noDocsEnabled ? "text-danger" : "text-faint"}`} title="Documents searched by this chat">
+                {enabledDocCount}/{docCount} docs
+              </span>
+            )}
+            <button
+              className="ml-1 flex h-[32px] w-[32px] shrink-0 items-center justify-center rounded-full bg-muted text-bg transition hover:opacity-85 active:scale-95 disabled:cursor-not-allowed disabled:bg-surface disabled:text-faint"
+              onClick={submit} disabled={busy || noDocsEnabled || !value.trim()} title={noDocsEnabled ? "Enable at least one document" : "Send"}
+            >
+              {busy ? (
+                <span className="h-[15px] w-[15px] animate-spin rounded-full border-2 border-white/35 border-t-white" />
+              ) : (
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline>
+                </svg>
+              )}
+            </button>
+          </div>
+        </div>
       </div>
     </footer>
   );
@@ -221,6 +216,8 @@ function Composer() {
 export function Chat() {
   const [dragging, setDragging] = useState(false);
   const dragDepth = useRef(0);
+  const t = activeThread();
+  const empty = !t || t.messages.length === 0;
 
   const filesFromDrop = (dt: DataTransfer): string[] => {
     const paths: string[] = [];
@@ -233,7 +230,7 @@ export function Chat() {
 
   return (
     <main
-      className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+      className="main-chrome relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
       onDragEnter={(e) => {
         if (!Array.from(e.dataTransfer.types).includes("Files")) return;
         e.preventDefault();
@@ -258,8 +255,19 @@ export function Chat() {
         void addTempPdfsToThread(filesFromDrop(e.dataTransfer));
       }}
     >
-      <Messages />
-      <Composer />
+      {empty ? (
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center pb-[13vh]">
+          <div className="mb-7 px-6 text-center text-[24px] font-medium text-ink">
+            What would you like to know?
+          </div>
+          <Composer centered />
+        </div>
+      ) : (
+        <>
+          <Messages />
+          <Composer />
+        </>
+      )}
       {dragging && (
         <div className="pointer-events-none absolute inset-3 z-30 flex items-center justify-center rounded-lg border border-dashed border-tint bg-tint-soft/80 text-[14px] font-medium text-tint-strong shadow-[0_12px_36px_rgba(20,20,18,0.10)]">
           Drop PDFs to search in this chat

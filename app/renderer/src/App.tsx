@@ -42,26 +42,26 @@ function AppHeader({ environmentOpen, onToggleEnvironment }: { environmentOpen: 
     : libraryLabel(store.activeCollection);
 
   return (
-    <header className="app-drag window-header flex h-[46px] shrink-0 items-center border-b border-border">
-      <div className={`flex h-full w-[300px] min-w-[300px] items-center border-r border-border bg-surface px-3 ${IS_MAC ? "pl-[106px]" : ""}`}>
-        <span className="text-[12.5px] font-semibold text-ink">{APP_NAME}</span>
+    <header className="app-drag window-header flex h-[46px] shrink-0 items-center">
+      <div className={`sidebar-chrome flex h-full w-[300px] min-w-[300px] items-center px-3 ${IS_MAC ? "pl-[86px]" : ""}`}>
+        <span className="relative z-10 text-[12.5px] font-semibold text-ink/90">{APP_NAME}</span>
       </div>
-      <div className="flex min-w-0 flex-1 items-center gap-2 px-5">
-        <div className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-[14px] font-semibold text-ink">
+      <div className="main-chrome flex h-full min-w-0 flex-1 items-center gap-2 px-7">
+        <div className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-[12.5px] font-medium text-faint/80">
           {title}
         </div>
         {libBadge && (
           <span
-            className="app-no-drag shrink-0 rounded-md border border-border bg-surface px-1.5 py-0.5 text-[11px] font-medium text-muted"
+            className="app-no-drag shrink-0 rounded-md border border-border bg-surface-3 px-1.5 py-0.5 text-[11px] font-medium text-faint"
             title="Library context for this chat"
           >{libBadge}</span>
         )}
       </div>
-      <div className={`flex items-center justify-end gap-2 overflow-hidden pr-4 text-[11.5px] ${store.statusErr ? "text-danger" : "text-faint"}`}>
+      <div className={`main-chrome flex h-full items-center justify-end gap-2 overflow-hidden pr-5 text-[11.5px] ${store.statusErr ? "text-danger" : "text-faint"}`}>
         {working && <HeaderSpinner />}
         <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{status}</span>
         <button
-          className={`app-no-drag ml-2 flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-lg border text-muted shadow-[0_1px_2px_rgba(20,20,18,0.04)] transition hover:bg-surface-2 hover:text-ink ${environmentOpen ? "border-border-strong bg-surface-2 text-ink" : "border-border bg-bg"}`}
+          className={`app-no-drag ml-2 flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-lg border text-faint transition hover:bg-surface-2 hover:text-ink ${environmentOpen ? "border-border-strong bg-surface-2 text-ink" : "border-border-strong bg-surface-2"}`}
           title="Environment"
           aria-label="Toggle environment side sheet"
           aria-pressed={environmentOpen}
@@ -374,7 +374,7 @@ export function App() {
   }, []);
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-bg">
+    <div className="app-shell flex h-screen flex-col overflow-hidden">
       <AppHeader
         environmentOpen={environmentOpen}
         onToggleEnvironment={() => setEnvironmentOpen((v) => !v)}

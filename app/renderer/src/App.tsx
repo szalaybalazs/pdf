@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { useStore, store, activeThread, newThread, closeSettings, openSettings } from "./store";
+import { useStore, store, bump, activeThread, newThread, closeSettings, openSettings, createCollection, deleteCollection } from "./store";
 import { Sidebar } from "./components/Sidebar";
 import { Chat } from "./components/Chat";
 import { Inspector } from "./components/Inspector";
@@ -61,9 +61,63 @@ function AppHeader({ environmentOpen, onToggleEnvironment }: { environmentOpen: 
   );
 }
 
+function LibraryDialog({ onClose }: { onClose: () => void }) {
+  const [name, setName] = useState("");
+  const [saving, setSaving] = useState(false);
+  const trimmed = name.trim();
+
+  const create = async () => {
+    if (!trimmed || saving) return;
+    setSaving(true);
+    try {
+      if (await createCollection(trimmed)) onClose();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div
+      className="modal-scrim fixed inset-0 z-[100] flex items-center justify-center backdrop-blur-[2px]"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <form
+        className="w-[380px] max-w-[calc(100vw-48px)] rounded-2xl border border-border-strong bg-bg p-5 shadow-[0_8px_30px_rgba(20,20,18,0.18)]"
+        onSubmit={(e) => { e.preventDefault(); void create(); }}
+      >
+        <div className="text-[17px] font-semibold tracking-tight text-ink">New Library</div>
+        <label className="mb-1.5 mt-4 block text-[12px] font-medium text-muted">Name</label>
+        <input
+          autoFocus
+          className="w-full rounded-lg border border-border-strong bg-surface px-3 py-2.5 text-[13px] text-ink outline-none transition focus:border-tint focus:ring-[3px] focus:ring-tint/15"
+          type="text"
+          autoComplete="off"
+          spellCheck={false}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}
+        />
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            className="rounded-lg border border-border-strong bg-bg px-4 py-2 text-[13px] font-medium text-ink transition hover:bg-surface-2"
+            type="button"
+            onClick={onClose}
+          >Cancel</button>
+          <button
+            className="rounded-lg border border-tint bg-tint px-4 py-2 text-[13px] font-medium text-white transition hover:opacity-90 disabled:opacity-50"
+            type="submit"
+            disabled={!trimmed || saving}
+          >Create</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 export function App() {
   useStore();   // re-render on any store change
   const [environmentOpen, setEnvironmentOpen] = useState(false);
+  const [creatingLibrary, setCreatingLibrary] = useState(false);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -75,13 +129,30 @@ export function App() {
     };
     const onNewThread = () => newThread(true);
     const onOpenSettings = () => openSettings();
+    const onNewLibrary = () => setCreatingLibrary(true);
+    const onDeleteLibrary = () => {
+      const name = store.activeCollection;
+      if (name === "default") {
+        store.status = "The Default library can't be deleted.";
+        store.statusErr = true;
+        bump();
+        return;
+      }
+      if (window.confirm(`Delete the "${name}" library and its index? Switches back to Default.`)) {
+        void deleteCollection(name);
+      }
+    };
     window.addEventListener("keydown", onKey);
     window.addEventListener("pdf-qa-new-thread", onNewThread);
     window.addEventListener("pdf-qa-open-settings", onOpenSettings);
+    window.addEventListener("pdf-qa-new-library", onNewLibrary);
+    window.addEventListener("pdf-qa-delete-library", onDeleteLibrary);
     return () => {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("pdf-qa-new-thread", onNewThread);
       window.removeEventListener("pdf-qa-open-settings", onOpenSettings);
+      window.removeEventListener("pdf-qa-new-library", onNewLibrary);
+      window.removeEventListener("pdf-qa-delete-library", onDeleteLibrary);
     };
   }, []);
 
@@ -99,6 +170,7 @@ export function App() {
         </div>
       </div>
       {store.settingsOpen && <Settings />}
+      {creatingLibrary && <LibraryDialog onClose={() => setCreatingLibrary(false)} />}
       <Viewer />
     </div>
   );

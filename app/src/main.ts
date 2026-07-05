@@ -602,6 +602,15 @@ function dispatchRendererEvent(name: string): void {
   );
 }
 
+function libraryMenuItems(): MenuItemConstructorOptions[] {
+  return listCollectionsAction().map((c) => ({
+    label: `${c.name === "default" ? "Default library" : c.name} (${c.docs})`,
+    type: "radio" as const,
+    checked: c.active,
+    click: () => { setCollectionAction(c.name); },
+  }));
+}
+
 function installApplicationMenu(): void {
   const isMac = process.platform === "darwin";
   const template: MenuItemConstructorOptions[] = [
@@ -630,6 +639,10 @@ function installApplicationMenu(): void {
         { label: "New Chat", accelerator: "CommandOrControl+N", click: () => dispatchRendererEvent("pdf-qa-new-thread") },
         { type: "separator" },
         { label: "Add PDFs to Index…", accelerator: "CommandOrControl+O", click: () => { void addPdfsAction(); } },
+        { type: "separator" },
+        { label: "Library", submenu: libraryMenuItems() },
+        { label: "New Library…", click: () => dispatchRendererEvent("pdf-qa-new-library") },
+        { label: "Delete Current Library…", click: () => dispatchRendererEvent("pdf-qa-delete-library") },
         ...(!isMac ? [
           { type: "separator" } as MenuItemConstructorOptions,
           { label: "Check for Updates…", click: () => { void checkForUpdates(true); } } as MenuItemConstructorOptions,
@@ -755,6 +768,7 @@ function createCollectionAction(name: string): { ok: boolean; name?: string; err
   log("info", `created collection ${clean}`);
   track("collection_created");
   setActiveCollectionFile(clean);   // drop straight into the new (empty) library
+  installApplicationMenu();
   restartBackend();
   return { ok: true, name: clean };
 }
@@ -773,6 +787,7 @@ function deleteCollectionAction(name: string): { ok: boolean; error?: string } {
   }
   log("info", `deleted collection ${clean}${wasActive ? " (was active -> default)" : ""}`);
   track("collection_deleted");
+  installApplicationMenu();
   if (wasActive) restartBackend();
   return { ok: true };
 }
@@ -785,6 +800,7 @@ function setCollectionAction(name: string): string {
   setActiveCollectionFile(target);
   log("info", `switching collection -> ${target}`);
   track("collection_switched");
+  installApplicationMenu();
   restartBackend();
   return target;
 }

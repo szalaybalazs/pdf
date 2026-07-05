@@ -2,9 +2,9 @@ import React, { useState } from "react";
 import {
   store, activeThread, visibleThreads, newThread, selectThread, deleteThread,
   setSearchQuery, addPdfs, openDoc, showDocMenu, openSettings,
-  docEnabled, enabledDocs, setAllDocsEnabled, setDocEnabled, threadDocs,
+  docEnabled, enabledDocs, setDocEnabled, threadDocs,
   installUpdate, showThreadMenu, ingestFiles,
-  switchCollection, createCollection, deleteCollection,
+  switchCollection,
 } from "../store";
 import type { Thread } from "../types";
 import { SEP } from "../platform";
@@ -241,22 +241,12 @@ function IngestProgress() {
 
 export function Sidebar() {
   const [docsOpen, setDocsOpen] = useState(true);
-  // Inline "new library" input — Electron's renderer doesn't support window.prompt().
-  const [creating, setCreating] = useState(false);
-  const [newLib, setNewLib] = useState("");
-  const submitNewLib = () => {
-    const n = newLib.trim();
-    if (n) void createCollection(n);
-    setNewLib("");
-    setCreating(false);
-  };
   const threads = visibleThreads();
   const threadGroups = groupThreadsByDate(threads);
   const searching = store.searchResults !== null;
   const working = !store.ready || !!store.ingest.text || !!activeThread()?.busy;
   const docs = threadDocs();
   const enabledCount = enabledDocs().length;
-  const allDocsEnabled = docs.length > 0 && enabledCount === docs.length;
 
   return (
     <aside className="relative z-30 flex min-h-0 w-[300px] min-w-[300px] shrink-0 flex-col border-r border-border bg-surface px-3 pb-3 pt-3">
@@ -316,69 +306,38 @@ export function Sidebar() {
         ))}
       </ul>
 
-      {store.collections.length >= 1 && (
-        <div className="mt-3 flex items-center gap-1 px-1 pt-2" title="Active library">
-          {creating ? (
-            <input
-              autoFocus
-              className="h-[28px] min-w-0 flex-1 rounded-md border border-border bg-bg px-1.5 text-[13px] text-muted outline-none"
-              placeholder="New library name…"
-              value={newLib}
-              onChange={(e) => setNewLib(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") submitNewLib();
-                else if (e.key === "Escape") { setNewLib(""); setCreating(false); }
-              }}
-              onBlur={() => { setNewLib(""); setCreating(false); }}
-            />
-          ) : (
-            <select
-              className="h-[28px] min-w-0 flex-1 rounded-md border border-border bg-bg px-1.5 text-[13px] text-muted"
-              value={store.activeCollection}
-              onChange={(e) => switchCollection(e.target.value)}
-            >
-              {store.collections.map((c) => (
-                <option key={c.name} value={c.name}>
-                  {c.name === "default" ? "Default library" : c.name} ({c.docs})
-                </option>
-              ))}
-            </select>
-          )}
-          <button
-            className="flex h-[28px] w-[28px] items-center justify-center rounded-md text-faint transition hover:bg-bg hover:text-muted"
-            title={creating ? "Create library" : "New library"}
-            // onMouseDown (not onClick) so it fires before the input's onBlur cancels.
-            onMouseDown={(e) => {
-              e.preventDefault();
-              if (creating) submitNewLib(); else setCreating(true);
-            }}
-          >+</button>
-          {!creating && store.activeCollection !== "default" && (
-            <button
-              className="flex h-[28px] w-[28px] items-center justify-center rounded-md text-faint transition hover:bg-bg hover:text-muted"
-              title={`Delete the “${store.activeCollection}” library`}
-              onClick={() => {
-                const name = store.activeCollection;
-                if (window.confirm(`Delete the “${name}” library and its index? Switches back to Default.`)) {
-                  void deleteCollection(name);   // main switches to Default + respawns atomically
-                }
-              }}
-            >−</button>
-          )}
-        </div>
-      )}
-
-      <div className="mt-3 flex items-center gap-1 px-1 pb-1 pt-2">
+      <div className="mt-3 flex items-center gap-1 px-1 pb-1 pt-2" title="Active library">
         <button
-          className="flex h-[28px] min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 text-left text-[13px] text-faint transition hover:bg-bg hover:text-muted"
+          className="flex h-[28px] w-[24px] shrink-0 items-center justify-center rounded-md text-faint transition hover:bg-bg hover:text-muted"
           title={docsOpen ? "Collapse documents" : "Expand documents"}
+          aria-label={docsOpen ? "Collapse documents" : "Expand documents"}
+          aria-expanded={docsOpen}
           onClick={() => setDocsOpen((v) => !v)}
         >
           <ChevronIcon open={docsOpen} />
-          <FolderIcon />
-          <span className="overflow-hidden text-ellipsis whitespace-nowrap">Documents</span>
-          <span className="ml-auto text-[12px]">{enabledCount}/{docs.length}</span>
         </button>
+        {store.collections.length >= 1 && (
+          <select
+            className="min-w-0 flex-1 cursor-pointer appearance-none truncate border-none bg-transparent px-0 py-1 font-mono text-[12px] text-muted outline-none transition hover:text-ink focus:text-ink"
+            title="Active library"
+            value={store.activeCollection}
+            onChange={(e) => switchCollection(e.target.value)}
+          >
+            {store.collections.map((c) => (
+              <option key={c.name} value={c.name}>
+                {c.name === "default" ? "Default library" : c.name} ({c.docs})
+              </option>
+            ))}
+          </select>
+        )}
+        {store.collections.length === 0 && (
+          <div className="flex h-[28px] min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 text-[13px] text-faint">
+            <FolderIcon />
+            <span className="overflow-hidden text-ellipsis whitespace-nowrap">Documents</span>
+            <span className="ml-auto text-[12px]">{enabledCount}/{docs.length}</span>
+          </div>
+        )}
+        {/*
         {docs.length > 0 && (
           <button
             className={iconBtn}
@@ -388,6 +347,7 @@ export function Sidebar() {
             <span className="font-mono text-[10px]">{allDocsEnabled ? "0" : "All"}</span>
           </button>
         )}
+        */}
         <button
           className={iconBtn}
           title="Add PDFs to the index" onClick={() => void addPdfs()}

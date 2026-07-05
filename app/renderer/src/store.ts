@@ -430,17 +430,18 @@ export function switchCollection(name: string): void {
   void api.setCollection(name);
 }
 
-export async function createCollection(name: string): Promise<void> {
+export async function createCollection(name: string): Promise<boolean> {
   const clean = name.trim();
-  if (!clean) return;
+  if (!clean) return false;
   const res = await api.createCollection(clean);
   if (!res.ok) {
     store.status = res.error || "Could not create library."; store.statusErr = true; bump();
-    return;
+    return false;
   }
   // On success the backend respawns into the new (empty) library; show the
   // switching state until the fresh `ready` arrives.
   store.status = `opening ${res.name}…`; store.statusErr = false; store.ready = false; bump();
+  return true;
 }
 
 export async function deleteCollection(name: string): Promise<void> {

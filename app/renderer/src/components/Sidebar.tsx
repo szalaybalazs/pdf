@@ -4,7 +4,7 @@ import {
   setSearchQuery, addPdfs, openDoc, showDocMenu, openSettings,
   docEnabled, enabledDocs, setDocEnabled, threadDocs,
   installUpdate, showThreadMenu, ingestFiles,
-  switchCollection,
+  switchCollection, openLibrarySettings,
 } from "../store";
 import type { Thread } from "../types";
 import { SEP } from "../platform";
@@ -240,7 +240,7 @@ function IngestProgress() {
 }
 
 export function Sidebar() {
-  const [docsOpen, setDocsOpen] = useState(true);
+  const [docsOpen, setDocsOpen] = useState(false);
   const threads = visibleThreads();
   const threadGroups = groupThreadsByDate(threads);
   const searching = store.searchResults !== null;
@@ -348,6 +348,14 @@ export function Sidebar() {
           </button>
         )}
         */}
+        {store.collections.length >= 1 && (
+          <button
+            className={iconBtn}
+            title="Library settings (rename, OCR language)"
+            aria-label="Library settings"
+            onClick={() => openLibrarySettings()}
+          ><SettingsIcon /></button>
+        )}
         <button
           className={iconBtn}
           title="Add PDFs to the index" onClick={() => void addPdfs()}

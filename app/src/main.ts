@@ -20,6 +20,7 @@ import { createAppRouter, RouterDeps } from "./trpc";
 import { checkForUpdates, initAutoUpdater, installDownloadedUpdate, getUpdateState } from "./updater";
 import type { UpdateState } from "./trpc";
 import { APP_NAME } from "./branding";
+import { isKnownOcrLanguage } from "./languages";
 import { initAnalytics, setAnalyticsEnabled, track } from "./analytics";
 import { initErrorReporting, setErrorReportingEnabled, backendSentryEnv, recordLog } from "./errors";
 
@@ -188,6 +189,42 @@ function activeIndexDir(): string {
   return collectionIndexDir(getActiveCollection());
 }
 
+// Per-library settings live in a small meta.json inside the collection's index
+// dir (which always exists — created on collection create, and dataDir()/index
+// for the default library). Currently just the OCR language.
+function collectionMetaPath(name: string): string {
+  return path.join(collectionIndexDir(name), "meta.json");
+}
+
+// The library's chosen OCR language (a Tesseract code, e.g. "deu"), or "" when
+// none is set. "" means "inherit the OCR_LANG env / backend default (eng)", so
+// the historical behaviour is preserved for libraries that never picked one.
+function getCollectionLanguage(name: string): string {
+  try {
+    const meta = JSON.parse(fs.readFileSync(collectionMetaPath(name), "utf-8"));
+    const lang = typeof meta.language === "string" ? meta.language.trim() : "";
+    return isKnownOcrLanguage(lang) ? lang : "";
+  } catch {
+    return "";
+  }
+}
+
+// Persist a library's OCR language (merging into any existing meta.json). An
+// empty/unknown code clears it back to the default. Best-effort; logs on failure.
+function setCollectionLanguageFile(name: string, code: string): void {
+  const lang = isKnownOcrLanguage(code) ? code : "";
+  const p = collectionMetaPath(name);
+  let meta: Record<string, unknown> = {};
+  try { meta = JSON.parse(fs.readFileSync(p, "utf-8")); } catch { /* new/absent meta */ }
+  if (lang) meta.language = lang; else delete meta.language;
+  try {
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, JSON.stringify(meta, null, 2));
+  } catch (e) {
+    log("warn", `could not persist language for ${name}`, (e as Error).message);
+  }
+}
+
 function cleanupTempThreadIndexes(): void {
   try {
     fs.rmSync(path.join(dataDir(), "temp-threads"), { recursive: true, force: true });
@@ -303,6 +340,12 @@ function backendEnv(): NodeJS.ProcessEnv {
     INDEX_DIR,
     PDF_QA_COLLECTION: collection,
   };
+  // The active library's OCR language drives Tesseract for scanned/figure pages
+  // (read at ingest time — both serve and ingest spawn through here). Only set it
+  // when the library picked one, so an explicit OCR_LANG env override still wins
+  // for libraries that never chose a language.
+  const ocrLang = getCollectionLanguage(collection);
+  if (ocrLang) env.OCR_LANG = ocrLang;
   // Keys set in the settings page take precedence over any inherited / .env value.
   if (settings.openaiKey) env.OPENAI_API_KEY = settings.openaiKey;
   if (settings.anthropicKey) env.ANTHROPIC_API_KEY = settings.anthropicKey;
@@ -642,6 +685,7 @@ function installApplicationMenu(): void {
         { type: "separator" },
         { label: "Library", submenu: libraryMenuItems() },
         { label: "New Library…", click: () => dispatchRendererEvent("pdf-qa-new-library") },
+        { label: "Library Settings…", click: () => dispatchRendererEvent("pdf-qa-library-settings") },
         { label: "Delete Current Library…", click: () => dispatchRendererEvent("pdf-qa-delete-library") },
         ...(!isMac ? [
           { type: "separator" } as MenuItemConstructorOptions,
@@ -744,7 +788,7 @@ function docCountForIndex(indexDir: string): number {
   } catch { return 0; }
 }
 
-function listCollectionsAction(): { name: string; docs: number; active: boolean }[] {
+function listCollectionsAction(): { name: string; docs: number; active: boolean; language: string }[] {
   const active = getActiveCollection();
   const names = ["default"];
   try {
@@ -752,10 +796,15 @@ function listCollectionsAction(): { name: string; docs: number; active: boolean 
       if (d.isDirectory() && d.name !== "default") names.push(d.name);
     }
   } catch { /* no collections dir yet */ }
-  return names.map((n) => ({ name: n, docs: docCountForIndex(collectionIndexDir(n)), active: n === active }));
+  return names.map((n) => ({
+    name: n,
+    docs: docCountForIndex(collectionIndexDir(n)),
+    active: n === active,
+    language: getCollectionLanguage(n),
+  }));
 }
 
-function createCollectionAction(name: string): { ok: boolean; name?: string; error?: string } {
+function createCollectionAction(name: string, language = ""): { ok: boolean; name?: string; error?: string } {
   const clean = sanitizeCollectionName(name);
   if (!clean || clean.toLowerCase() === "default") return { ok: false, error: "Invalid library name." };
   const dir = path.join(collectionsRootDir(), clean);
@@ -765,12 +814,31 @@ function createCollectionAction(name: string): { ok: boolean; name?: string; err
   } catch (e) {
     return { ok: false, error: (e as Error).message };
   }
-  log("info", `created collection ${clean}`);
+  if (language) setCollectionLanguageFile(clean, language);
+  log("info", `created collection ${clean}${language ? ` (lang ${language})` : ""}`);
   track("collection_created");
   setActiveCollectionFile(clean);   // drop straight into the new (empty) library
   installApplicationMenu();
   restartBackend();
   return { ok: true, name: clean };
+}
+
+// Set a library's OCR language. The next ingest into that library picks it up
+// (both serve and ingest read OCR_LANG from backendEnv at spawn time). If it's
+// the active library we respawn the backend so a subsequent add-PDFs run uses
+// the new language without needing a manual restart. Already-indexed documents
+// keep their old OCR text until re-added.
+function setCollectionLanguageAction(input: { name: string; language: string }): { ok: boolean; error?: string } {
+  const name = (input?.name || "").trim() || "default";
+  const language = (input?.language || "").trim();
+  if (language && !isKnownOcrLanguage(language)) return { ok: false, error: "Unknown language." };
+  const known = name === "default" || fs.existsSync(path.join(collectionsRootDir(), sanitizeCollectionName(name)));
+  if (!known) return { ok: false, error: "No such library." };
+  setCollectionLanguageFile(name === "default" ? "default" : sanitizeCollectionName(name), language);
+  log("info", `set language for ${name} -> ${language || "(default)"}`);
+  track("collection_language_set");
+  if (name === getActiveCollection()) restartBackend();
+  return { ok: true };
 }
 
 function deleteCollectionAction(name: string): { ok: boolean; error?: string } {
@@ -790,6 +858,36 @@ function deleteCollectionAction(name: string): { ok: boolean; error?: string } {
   installApplicationMenu();
   if (wasActive) restartBackend();
   return { ok: true };
+}
+
+// Rename a named library: move its directory (index, meta, page images all
+// travel with it since stored paths are relative). The Default library keeps the
+// historical top-level layout and can't be renamed. If it's the active library
+// we re-point the active file and respawn so the backend serves the new path.
+function renameCollectionAction(input: { name: string; newName: string }): { ok: boolean; name?: string; error?: string } {
+  const old = sanitizeCollectionName(input?.name || "");
+  if (old.toLowerCase() === "default" || (input?.name || "").trim().toLowerCase() === "default") {
+    return { ok: false, error: "The Default library can't be renamed." };
+  }
+  const clean = sanitizeCollectionName(input?.newName || "");
+  if (!clean || clean.toLowerCase() === "default") return { ok: false, error: "Invalid library name." };
+  if (clean === old) return { ok: true, name: old };
+  const src = path.join(collectionsRootDir(), old);
+  if (!fs.existsSync(src)) return { ok: false, error: "No such library." };
+  const dst = path.join(collectionsRootDir(), clean);
+  if (fs.existsSync(dst)) return { ok: false, error: "A library with that name already exists." };
+  const wasActive = old === getActiveCollection();
+  try {
+    fs.renameSync(src, dst);
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+  if (wasActive) setActiveCollectionFile(clean);
+  log("info", `renamed collection ${old} -> ${clean}`);
+  track("collection_renamed");
+  installApplicationMenu();
+  if (wasActive) restartBackend();
+  return { ok: true, name: clean };
 }
 
 // Switch the active collection: persist the choice and respawn the backend so it
@@ -1280,6 +1378,8 @@ const routerDeps: RouterDeps = {
   listCollections: listCollectionsAction,
   createCollection: createCollectionAction,
   deleteCollection: deleteCollectionAction,
+  renameCollection: renameCollectionAction,
+  setCollectionLanguage: setCollectionLanguageAction,
   readImage: readImageAction,
   getUpdateState,
   installUpdate: installUpdateAction,

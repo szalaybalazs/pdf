@@ -15,13 +15,18 @@
 #   Windows : downloads the pinned UB-Mannheim installer and extracts it with 7z
 #             (run under Git Bash / MSYS).
 #
-# Languages bundled: $PDF_QA_BUNDLE_LANGS (default "eng osd"). Set PDF_QA_SKIP_TESSERACT=1
-# to skip vendoring entirely (OCR then relies on a system tesseract, if any).
+# Languages bundled: $PDF_QA_BUNDLE_LANGS. The default set below mirrors the
+# user-selectable languages in app/src/languages.ts (a library's OCR language
+# only works in a packaged build if its traineddata is bundled here) plus "osd"
+# for orientation detection. Override the env to trim or extend the set. Set
+# PDF_QA_SKIP_TESSERACT=1 to skip vendoring entirely (OCR then relies on a system
+# tesseract, if any).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST="${1:-$ROOT/app/backend-dist/tesseract}"
-LANGS="${PDF_QA_BUNDLE_LANGS:-eng osd}"
+# Keep in sync with OCR_LANGUAGES in app/src/languages.ts.
+LANGS="${PDF_QA_BUNDLE_LANGS:-eng deu fra spa ita por nld rus ara chi_sim chi_tra jpn kor osd}"
 
 # Pinned Windows engine (UB-Mannheim). Override WIN_TESS_VERSION / WIN_TESS_URL
 # to bump. The asset is the NSIS installer; we extract it rather than run it.

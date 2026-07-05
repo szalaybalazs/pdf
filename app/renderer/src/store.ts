@@ -69,6 +69,7 @@ interface State {
   ingest: IngestState;
   tokens: SessionTokens;
   settingsOpen: boolean;
+  librarySettings: string | null;   // name of the library whose settings dialog is open (null = closed)
   ready: boolean;
   update: UpdateState | null;   // auto-update state; drives the sidebar restart indicator
   collections: Collection[];    // known libraries (default + named)
@@ -92,6 +93,7 @@ export const store: State = {
   ingest: { text: "", percent: null },
   tokens: { prompt: 0, completion: 0, total: 0, queries: 0 },
   settingsOpen: false,
+  librarySettings: null,
   ready: false,
   update: null,
   collections: [],
@@ -430,10 +432,10 @@ export function switchCollection(name: string): void {
   void api.setCollection(name);
 }
 
-export async function createCollection(name: string): Promise<boolean> {
+export async function createCollection(name: string, language = ""): Promise<boolean> {
   const clean = name.trim();
   if (!clean) return false;
-  const res = await api.createCollection(clean);
+  const res = await api.createCollection(clean, language);
   if (!res.ok) {
     store.status = res.error || "Could not create library."; store.statusErr = true; bump();
     return false;
@@ -442,6 +444,46 @@ export async function createCollection(name: string): Promise<boolean> {
   // switching state until the fresh `ready` arrives.
   store.status = `opening ${res.name}…`; store.statusErr = false; store.ready = false; bump();
   return true;
+}
+
+// Rename a library. Returns the new (sanitized) name on success, or null on
+// failure (status carries the reason). When it's the active library the backend
+// respawns; otherwise the list is refreshed in place.
+export async function renameCollection(name: string, newName: string): Promise<string | null> {
+  const clean = newName.trim();
+  if (!clean || name === "default") return null;
+  const isActive = name === store.activeCollection;
+  const res = await api.renameCollection(name, clean);
+  if (!res.ok || !res.name) {
+    store.status = res.error || "Could not rename library."; store.statusErr = true; bump();
+    return null;
+  }
+  if (store.librarySettings === name) store.librarySettings = res.name;   // keep the open dialog pointed at it
+  if (isActive) {
+    store.status = `opening ${res.name}…`; store.statusErr = false; store.ready = false; bump();
+  } else {
+    void refreshCollections();
+  }
+  return res.name;
+}
+
+// Change a library's OCR language. When it's the active library the backend
+// respawns (a fresh `ready` follows); otherwise we refresh the list in place so
+// the picker reflects the new value.
+export async function setCollectionLanguage(name: string, language: string): Promise<void> {
+  const current = store.collections.find((c) => c.name === name)?.language || "";
+  if (language === current) return;
+  const isActive = name === store.activeCollection;
+  const res = await api.setCollectionLanguage(name, language);
+  if (!res.ok) {
+    store.status = res.error || "Could not set language."; store.statusErr = true; bump();
+    return;
+  }
+  if (isActive) {
+    store.status = "applying language…"; store.statusErr = false; store.ready = false; bump();
+  } else {
+    void refreshCollections();
+  }
 }
 
 export async function deleteCollection(name: string): Promise<void> {
@@ -473,6 +515,8 @@ export function removeDoc(name: string): void {
 // ---- settings --------------------------------------------------------------
 export function openSettings(): void { store.settingsOpen = true; bump(); }
 export function closeSettings(): void { store.settingsOpen = false; bump(); }
+export function openLibrarySettings(name = store.activeCollection): void { store.librarySettings = name; bump(); }
+export function closeLibrarySettings(): void { store.librarySettings = null; bump(); }
 
 // ---- auto-update -----------------------------------------------------------
 // The main process downloads updates in the background and pushes state here;

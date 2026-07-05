@@ -28,8 +28,10 @@ export const api = {
     trpc.showModelMenu.mutate({ models, selectedModel }),
   setCollection: (name: string) => trpc.setCollection.mutate(name),
   listCollections: () => trpc.listCollections.query(),
-  createCollection: (name: string) => trpc.createCollection.mutate(name),
+  createCollection: (name: string, language = "") => trpc.createCollection.mutate({ name, language }),
   deleteCollection: (name: string) => trpc.deleteCollection.mutate(name),
+  renameCollection: (name: string, newName: string) => trpc.renameCollection.mutate({ name, newName }),
+  setCollectionLanguage: (name: string, language: string) => trpc.setCollectionLanguage.mutate({ name, language }),
   readImage: (filePath: string): Promise<string> => trpc.readImage.query(filePath),
   getSettings: () => trpc.getSettings.query(),
   setSettings: (s: {

@@ -49,9 +49,11 @@ export interface RouterDeps {
   showThreadMenu: (input: { title: string; messages: unknown[]; markdown: string; filename: string }) => Promise<void>;
   showModelMenu: (input: { models: ModelMenuItem[]; selectedModel: string }) => Promise<string | null>;
   setCollection: (name: string) => string;   // switch active collection (respawns backend)
-  listCollections: () => { name: string; docs: number; active: boolean }[];
-  createCollection: (name: string) => { ok: boolean; name?: string; error?: string };
+  listCollections: () => { name: string; docs: number; active: boolean; language: string }[];
+  createCollection: (name: string, language: string) => { ok: boolean; name?: string; error?: string };
   deleteCollection: (name: string) => { ok: boolean; error?: string };
+  renameCollection: (input: { name: string; newName: string }) => { ok: boolean; name?: string; error?: string };
+  setCollectionLanguage: (input: { name: string; language: string }) => { ok: boolean; error?: string };
   readImage: (filePath: string) => string;    // page image -> data URL (guarded to dataDir)
   getUpdateState: () => UpdateState | null;   // current update state for late subscribers
   installUpdate: () => boolean;               // quit + install; false = dev no-op
@@ -114,8 +116,16 @@ export function createAppRouter(deps: RouterDeps) {
     })).mutation(({ input }) => deps.showModelMenu(input)),
     setCollection: t.procedure.input(z.string()).mutation(({ input }) => deps.setCollection(input)),
     listCollections: t.procedure.query(() => deps.listCollections()),
-    createCollection: t.procedure.input(z.string()).mutation(({ input }) => deps.createCollection(input)),
+    createCollection: t.procedure
+      .input(z.object({ name: z.string(), language: z.string().default("") }))
+      .mutation(({ input }) => deps.createCollection(input.name, input.language)),
     deleteCollection: t.procedure.input(z.string()).mutation(({ input }) => deps.deleteCollection(input)),
+    renameCollection: t.procedure
+      .input(z.object({ name: z.string(), newName: z.string() }))
+      .mutation(({ input }) => deps.renameCollection(input)),
+    setCollectionLanguage: t.procedure
+      .input(z.object({ name: z.string(), language: z.string() }))
+      .mutation(({ input }) => deps.setCollectionLanguage(input)),
     readImage: t.procedure.input(z.string()).query(({ input }) => deps.readImage(input)),
     installUpdate: t.procedure.mutation(() => deps.installUpdate()),
     track: t.procedure.input(z.object({

@@ -30,7 +30,16 @@ function InfoIcon() {
   );
 }
 
-function AppHeader({ environmentOpen, onToggleEnvironment }: { environmentOpen: boolean; onToggleEnvironment: () => void }) {
+function SidebarToggleIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="16" rx="2"></rect>
+      <line x1="9" y1="4" x2="9" y2="20"></line>
+    </svg>
+  );
+}
+
+function AppHeader({ sidebarOpen, onToggleSidebar, environmentOpen, onToggleEnvironment }: { sidebarOpen: boolean; onToggleSidebar: () => void; environmentOpen: boolean; onToggleEnvironment: () => void }) {
   const thread = activeThread();
   const working = !store.ready || !!store.ingest.text || !!thread?.busy;
   const title = thread?.title || "New chat";
@@ -43,8 +52,17 @@ function AppHeader({ environmentOpen, onToggleEnvironment }: { environmentOpen: 
 
   return (
     <header className="app-drag window-header flex h-[46px] shrink-0 items-center">
-      <div className={`sidebar-chrome flex h-full w-[300px] min-w-[300px] items-center px-3 ${IS_MAC ? "pl-[86px]" : ""}`}>
-        <span className="relative z-10 text-[12.5px] font-semibold text-ink/90">{APP_NAME}</span>
+      <div className={`flex h-full items-center gap-2 px-3 ${IS_MAC ? "pl-[86px]" : ""} ${sidebarOpen ? "sidebar-chrome w-[300px] min-w-[300px]" : "main-chrome"}`}>
+        <button
+          className="app-no-drag relative z-10 flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-lg text-faint transition hover:bg-surface-2 hover:text-ink"
+          title={`${sidebarOpen ? "Hide" : "Show"} sidebar (${IS_MAC ? "⌘" : "Ctrl+"}B)`}
+          aria-label={`${sidebarOpen ? "Hide" : "Show"} sidebar`}
+          aria-pressed={sidebarOpen}
+          onClick={onToggleSidebar}
+        >
+          <SidebarToggleIcon />
+        </button>
+        {sidebarOpen && <span className="relative z-10 text-[12.5px] font-semibold text-ink/90">{APP_NAME}</span>}
       </div>
       <div className="main-chrome flex h-full min-w-0 flex-1 items-center gap-2 px-7">
         <div className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-[12.5px] font-medium text-faint/80">
@@ -321,6 +339,7 @@ function LibrarySettingsDialog({ name, onClose }: { name: string; onClose: () =>
 export function App() {
   useStore();   // re-render on any store change
   const [environmentOpen, setEnvironmentOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [creatingLibrary, setCreatingLibrary] = useState(false);
 
   useEffect(() => {
@@ -328,6 +347,10 @@ export function App() {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "n") {
         e.preventDefault();
         newThread(true);
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "b") {
+        e.preventDefault();
+        setSidebarOpen((v) => !v);
       }
       if (e.key === "Escape" && store.settingsOpen) closeSettings();
       if (e.key === "Escape" && store.librarySettings !== null) closeLibrarySettings();
@@ -376,11 +399,13 @@ export function App() {
   return (
     <div className="app-shell flex h-screen flex-col overflow-hidden">
       <AppHeader
+        sidebarOpen={sidebarOpen}
+        onToggleSidebar={() => setSidebarOpen((v) => !v)}
         environmentOpen={environmentOpen}
         onToggleEnvironment={() => setEnvironmentOpen((v) => !v)}
       />
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        <Sidebar />
+        {sidebarOpen && <Sidebar />}
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <Chat />
           {environmentOpen && <Inspector onClose={() => setEnvironmentOpen(false)} />}

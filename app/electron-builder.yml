@@ -10,7 +10,7 @@
 # the updater actually applies on macOS — keep it enabled.
 appId: co.triyit.pdfqa
 productName: PDF QA
-copyright: Copyright © 2026 Triyit
+copyright: Copyright © 2026 Balázs Szalay
 
 directories:
   output: release
@@ -40,7 +40,7 @@ mac:
   target:
     - target: dmg
       arch: [arm64, x64]
-    - target: zip          # required for electron-updater on macOS
+    - target: zip # required for electron-updater on macOS
       arch: [arm64, x64]
   hardenedRuntime: true
   gatekeeperAssess: false
@@ -115,6 +115,7 @@ publish:
   - provider: s3
     bucket: desktop-electron-app-updates
     region: eu-central-1
-    path: pdf-qa         # per-app prefix; other apps share the bucket/domain under their own
-    acl: null            # bucket is private; CloudFront OAC serves it. (ACLs are
-                         # disabled anyway under Bucket-owner-enforced.)
+    path: pdf-qa # per-app prefix; other apps share the bucket/domain under their own
+    acl:
+      null # bucket is private; CloudFront OAC serves it. (ACLs are
+      # disabled anyway under Bucket-owner-enforced.)

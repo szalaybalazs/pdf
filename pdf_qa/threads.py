@@ -18,6 +18,8 @@ from pathlib import Path
 
 import numpy as np
 
+from .textutil import strip_surrogates
+
 
 class ThreadStore:
     def __init__(self, db_path: Path):
@@ -54,7 +56,7 @@ class ThreadStore:
             "INSERT OR REPLACE INTO threads (id, title, created, updated, data, embedding) "
             "VALUES (?,?,?,?,?,?)",
             (tid, thread.get("title", ""), created, now,
-             json.dumps(thread, ensure_ascii=False), embedding),
+             strip_surrogates(json.dumps(thread, ensure_ascii=False)), embedding),
         )
         self.db.commit()
 
@@ -70,7 +72,8 @@ class ThreadStore:
         data = json.loads(row["data"])
         data["title"] = title
         self.db.execute("UPDATE threads SET title=?, data=? WHERE id=?",
-                        (title, json.dumps(data, ensure_ascii=False), tid))
+                        (strip_surrogates(title),
+                         strip_surrogates(json.dumps(data, ensure_ascii=False)), tid))
         self.db.commit()
 
     def set_embedding(self, tid: str, vec: np.ndarray) -> None:

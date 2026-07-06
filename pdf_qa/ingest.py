@@ -20,6 +20,7 @@ from tqdm import tqdm
 from . import config, ocr
 from .errors import capture_exception, init_error_reporting
 from .store import Chunk, VectorStore
+from .textutil import strip_surrogates
 
 
 def looks_like_text(s: str) -> bool:
@@ -108,11 +109,11 @@ def is_scanned(text: str, page: "fitz.Page") -> bool:
 def page_text(page: "fitz.Page", img_path: Path, use_ocr: bool) -> tuple[str, str]:
     """Return (text, source). Use the embedded text layer when it's real;
     otherwise fall back to OCR of the rendered page image."""
-    raw = page.get_text("text") or ""
+    raw = strip_surrogates(page.get_text("text") or "")
     if looks_like_text(raw):
         return raw, "pdf"
     if use_ocr and ocr.available():
-        ocr_txt = ocr.ocr_image(str(img_path), config.OCR_LANG)
+        ocr_txt = strip_surrogates(ocr.ocr_image(str(img_path), config.OCR_LANG))
         if looks_like_text(ocr_txt):
             return ocr_txt, "ocr"
     return "", "none"

@@ -16,6 +16,8 @@ from typing import Iterable
 
 import numpy as np
 
+from .textutil import strip_surrogates
+
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 
@@ -49,6 +51,16 @@ class Chunk:
     page_label: str = ""  # printed page label (e.g. "106", "xiv"); "" = use `page`.
                           # Books have front matter, so the printed page differs
                           # from the PDF page index; citations show this label.
+
+    def __post_init__(self):
+        # Malformed PDFs (and libraries ingested by older builds) can leave lone
+        # surrogates in the text. Scrub them here — at the single point every
+        # chunk is constructed, local or remote — so nothing downstream (LLM
+        # request bodies, thread JSON, emitted events) ever hits a UTF-8 encode
+        # that raises "surrogates not allowed".
+        self.text = strip_surrogates(self.text)
+        self.doc = strip_surrogates(self.doc)
+        self.page_label = strip_surrogates(self.page_label)
 
 
 class VectorStore:

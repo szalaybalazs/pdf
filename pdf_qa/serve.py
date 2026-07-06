@@ -35,6 +35,7 @@ from pathlib import Path
 from . import config
 from .errors import capture_exception, init_error_reporting
 from .store import VectorStore
+from .textutil import strip_surrogates
 from .threads import ThreadStore
 
 
@@ -53,7 +54,9 @@ _stores_lock = threading.Lock()
 def emit(obj: dict) -> None:
     if SESSION_ID and "session_id" not in obj:
         obj = {"session_id": SESSION_ID, **obj}
-    line = json.dumps(obj, ensure_ascii=False) + "\n"
+    # Malformed PDF text can carry lone surrogates that make the UTF-8 encode of
+    # this line explode; scrub them so an event never crashes the write.
+    line = strip_surrogates(json.dumps(obj, ensure_ascii=False)) + "\n"
     with _emit_lock:
         sys.stdout.write(line)
         sys.stdout.flush()

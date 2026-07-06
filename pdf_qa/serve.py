@@ -590,6 +590,18 @@ def handle_threads(tstore: ThreadStore, req: dict) -> None:
 def main(argv=None) -> int:
     # Idempotent: also called from backend_entry.py for packaged builds, but in
     # dev the app launches `python -m pdf_qa.serve` directly, so init here too.
+    #
+    # On Windows the console defaults to a legacy code page (cp1252), so writing
+    # a document name with an accented character (e.g. a combining acute, U+0301)
+    # to stdout/stderr raises UnicodeEncodeError and kills the backend. Force
+    # UTF-8 on both streams before anything is emitted. errors="replace" keeps a
+    # stray un-encodable byte from ever crashing the process again.
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass  # non-TextIOWrapper stream (e.g. redirected); nothing to do
+
     init_error_reporting()
 
     global SESSION_ID

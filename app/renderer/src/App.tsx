@@ -336,11 +336,61 @@ function LibrarySettingsDialog({ name, onClose }: { name: string; onClose: () =>
   );
 }
 
+type ConfirmRequest = {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  danger?: boolean;
+  onConfirm: () => void;
+};
+
+function ConfirmDialog({ title, message, confirmLabel, danger, onConfirm, onClose }: ConfirmRequest & { onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const confirmCls = danger
+    ? "rounded-lg border border-danger bg-bg px-4 py-2 text-[13px] font-medium text-danger transition hover:bg-danger/10"
+    : "rounded-lg border border-tint bg-tint px-4 py-2 text-[13px] font-medium text-white transition hover:opacity-90";
+
+  return (
+    <div
+      className="modal-scrim fixed inset-0 z-[100] flex items-center justify-center backdrop-blur-[2px]"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div
+        className="w-[380px] max-w-[calc(100vw-48px)] rounded-2xl border border-border-strong bg-bg p-5 shadow-[0_8px_30px_rgba(20,20,18,0.18)]"
+        role="alertdialog"
+        aria-modal="true"
+      >
+        <div className="text-[17px] font-semibold tracking-tight text-ink">{title}</div>
+        <p className="mt-2 text-[13px] leading-relaxed text-muted">{message}</p>
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            className="rounded-lg border border-border-strong bg-bg px-4 py-2 text-[13px] font-medium text-ink transition hover:bg-surface-2"
+            type="button"
+            onClick={onClose}
+          >Cancel</button>
+          <button
+            autoFocus
+            className={confirmCls}
+            type="button"
+            onClick={() => { onConfirm(); onClose(); }}
+          >{confirmLabel}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function App() {
   useStore();   // re-render on any store change
   const [environmentOpen, setEnvironmentOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [creatingLibrary, setCreatingLibrary] = useState(false);
+  const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -371,14 +421,21 @@ export function App() {
       if (isRemote) {
         // A remote library is a saved connection, not on-disk data — "removing"
         // it just disconnects the app; the server keeps the index.
-        if (window.confirm(`Disconnect the remote library "${name}"? The index stays on the server; switches back to Default.`)) {
-          void removeRemoteLibrary(name);
-        }
+        setConfirm({
+          title: "Disconnect library",
+          message: `Disconnect the remote library "${name}"? The index stays on the server; switches back to Default.`,
+          confirmLabel: "Disconnect",
+          onConfirm: () => void removeRemoteLibrary(name),
+        });
         return;
       }
-      if (window.confirm(`Delete the "${name}" library and its index? Switches back to Default.`)) {
-        void deleteCollection(name);
-      }
+      setConfirm({
+        title: "Delete library",
+        message: `Delete the "${name}" library and its index? Switches back to Default.`,
+        confirmLabel: "Delete",
+        danger: true,
+        onConfirm: () => void deleteCollection(name),
+      });
     };
     window.addEventListener("keydown", onKey);
     window.addEventListener("pdf-qa-new-thread", onNewThread);
@@ -418,6 +475,12 @@ export function App() {
           key={store.librarySettings}
           name={store.librarySettings}
           onClose={closeLibrarySettings}
+        />
+      )}
+      {confirm && (
+        <ConfirmDialog
+          {...confirm}
+          onClose={() => setConfirm(null)}
         />
       )}
       <Viewer />

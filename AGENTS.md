@@ -20,12 +20,14 @@ asks to cut a release.
 3. Show the drafted release notes to the user and ask for approval before
    changing the version. Do not bump the version, commit, or tag until the user
    approves the notes.
-4. After approval, bump the app version from `app/` using `npm version <level>`,
-   where `<level>` is the version bump requested by the user (`patch`, `minor`,
-   `major`, or an explicit SemVer version). If the prompt does not specify a
-   bump, use `patch`. Let `npm version` create the version commit and `v*` tag.
-5. Verify the result with `git status --short`, `git log -1 --oneline`, and
-   `git tag --points-at HEAD`. Report the new version, commit, tag, and any
-   files left uncommitted.
+4. After approval, update the app version in `app/package.json` by running
+   `npm version <level>` from `app/`, where `<level>` is the version bump
+   requested by the user (`patch`, `minor`, `major`, or an explicit SemVer
+   version). If the prompt does not specify a bump, use `patch`. The release
+   action must commit the changed release files and create the matching `v*`
+   git tag; prefer the commit and tag created by `npm version`.
+5. Verify the result with `git status --short`, `git log -1 --oneline`,
+   `git tag --points-at HEAD`, and the `version` field in `app/package.json`.
+   Report the new version, commit, tag, and any files left uncommitted.
 6. Never push as part of this skill. Do not run `git push`, `npm publish`, or
    `npm run publish` unless the user separately asks for that later.

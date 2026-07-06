@@ -682,7 +682,7 @@ function createWindow(): void {
     transparent: process.platform === "darwin",
     vibrancy: process.platform === "darwin" ? "sidebar" : undefined,
     visualEffectState: "active",
-    backgroundColor: process.platform === "darwin" ? "#00000000" : "#171717",
+    backgroundColor: process.platform === "darwin" ? "#00000000" : "#f7f7f5",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,

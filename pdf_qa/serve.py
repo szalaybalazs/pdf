@@ -498,6 +498,27 @@ def _dispatch_query(store: VectorStore | None, req: dict) -> None:
                      name=f"query-{req.get('reqId') or '?'}", daemon=True).start()
 
 
+def _run_followup(req: dict) -> None:
+    """Suggest a follow-up question for the last exchange (small model) and emit it
+    keyed by reqId. Best-effort: a blank suggestion or a failure emits nothing so
+    the UI keeps its default placeholder."""
+    from .llm import suggest_followup
+    try:
+        text = suggest_followup(req.get("question") or "", req.get("answer") or "")
+    except Exception as e:  # never crash the pool over a placeholder hint
+        capture_exception(e)
+        return
+    if text:
+        emit({"type": "followup", "reqId": req.get("reqId"), "text": text})
+
+
+def _dispatch_followup(req: dict) -> None:
+    """Run the follow-up suggestion off the stdin loop, like queries — it's a
+    network call to the small model and must not block answering."""
+    threading.Thread(target=_run_followup, args=(req,),
+                     name=f"followup-{req.get('reqId') or '?'}", daemon=True).start()
+
+
 def _append_calc_appendix(ans: str, calcs: list) -> str:
     """Append a 'Calculations' section listing any calc not already cited in the
     answer prose, numbered by its index so the renderer's [n] markers line up.
@@ -736,6 +757,8 @@ def main(argv=None) -> int:
             # Run on a worker thread so the loop stays free to read more
             # requests — multiple threads stream answers concurrently.
             _dispatch_query(store, req)
+        elif kind == "followup_suggest":
+            _dispatch_followup(req)
         elif kind in ("threads_dump", "thread_upsert", "thread_delete",
                       "thread_search", "title_suggest"):
             try:

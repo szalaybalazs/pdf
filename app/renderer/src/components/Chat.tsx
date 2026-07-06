@@ -143,6 +143,10 @@ function Composer({ centered = false }: { centered?: boolean }) {
   const noDocsEnabled = docCount > 0 && enabledDocCount === 0;
   const selectedModel = store.models.find((m) => m.id === store.selectedModel);
   const selectedModelLabel = selectedModel ? platformText(selectedModel.label) : "";
+  // A suggested next question from the small model, shown as ghost placeholder
+  // text once an answer has landed. Tab/→ (on an empty input) accepts it.
+  const suggestion = !busy && t?.followup ? t.followup : "";
+  const placeholder = suggestion || "Ask anything";
 
   const autosize = () => {
     const el = ref.current;
@@ -165,11 +169,18 @@ function Composer({ centered = false }: { centered?: boolean }) {
         <div className="composer-shell flex min-h-[96px] w-full max-w-[920px] flex-col rounded-[24px] border px-4.5 pb-2.5 pt-3.5 transition focus-within:border-border-strong">
           <div className="flex flex-1 items-start">
             <textarea
-              ref={ref} rows={1} placeholder="Ask anything"
+              ref={ref} rows={1} placeholder={placeholder}
               className="max-h-[160px] min-h-[42px] flex-1 resize-none border-none bg-transparent py-0 text-[15px] leading-normal text-ink outline-none placeholder:text-faint"
               value={value}
               onChange={(e) => setValue(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); } }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); return; }
+                // Accept the suggested question when the field is empty.
+                if (suggestion && !value && (e.key === "Tab" || e.key === "ArrowRight")) {
+                  e.preventDefault();
+                  setValue(suggestion);
+                }
+              }}
               disabled={noDocsEnabled}
             />
           </div>

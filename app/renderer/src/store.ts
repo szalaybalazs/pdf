@@ -307,6 +307,9 @@ export function send(question: string): void {
 
   const reqId = uid();
   touchThread(t);
+  // A new question is being asked — retire any follow-up suggestion from the
+  // previous answer so the composer placeholder doesn't linger as stale.
+  t.followup = undefined;
   // Stamp the library this question is asked in (the active library at send time
   // is exactly the context the backend will retrieve from — it can't switch
   // mid-request). Recorded per message so a thread that spans libraries is
@@ -742,6 +745,15 @@ export function handleServeEvent(ev: ServeEvent): void {
     if (t) { t.title = e.title; bump(); persistThread(t); }
     return;
   }
+  if (ev.type === "followup") {
+    const e = ev as { type: "followup"; reqId?: string; text?: string };
+    const tid = e.reqId ? reqToThread.get(e.reqId) : undefined;
+    const t = store.threads.find((x) => x.id === tid);
+    // Only surface it while this is still the thread's latest answer — if the
+    // user has already asked again, the suggestion is stale and `send()` cleared it.
+    if (t && !t.busy && e.text) { t.followup = e.text; bump(); persistThread(t); }
+    return;
+  }
   if (ev.type === "temp_indexed") {
     const e = ev as any;
     const t = store.threads.find((x) => x.id === e.threadId);
@@ -798,6 +810,12 @@ export function handleServeEvent(ev: ServeEvent): void {
     thread.busy = false;
     touchThread(thread);
     persistThread(thread);
+    // Ask the small model for a suggested next question (used as the composer
+    // placeholder). Best-effort and off the answer path — a `followup` event
+    // may or may not follow; the placeholder just falls back to its default.
+    if (a.text && a.text.trim()) {
+      api.sendRequest({ type: "followup_suggest", reqId, question, answer: a.text });
+    }
   } else if (ev.type === "error") {
     msg.error = (ev as BackendError).message; msg.done = true;
     thread.busy = false;

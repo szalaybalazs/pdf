@@ -35,9 +35,11 @@ export interface ThreadsEvent { type: "threads"; threads: Thread[]; }
 export interface ThreadTitleEvent { type: "thread_title"; id: string; title: string; }
 export interface ThreadResult { id: string; title: string; score: number; }
 export interface ThreadResultsEvent { type: "thread_results"; q: string; results: ThreadResult[]; }
+export interface FollowupEvent { type: "followup"; reqId?: string; text: string; }
 export type ServeEvent =
   | ToolEvent | AnswerEvent | ReadyEvent | BackendError | DeltaEvent
   | ThreadsEvent | ThreadTitleEvent | ThreadResultsEvent | HighlightedEvent
+  | FollowupEvent
   | { type: string; reqId?: string };
 
 // ---- in-memory chat model --------------------------------------------------
@@ -79,6 +81,7 @@ export interface Thread {
   tempDocs?: string[];
   branchedFromThreadId?: string;
   branchedFromReqId?: string;
+  followup?: string;   // transient: a suggested next question, used as the composer placeholder
   busy: boolean;
 }
 

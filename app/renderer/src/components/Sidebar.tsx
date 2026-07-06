@@ -144,8 +144,8 @@ function SidebarSpinner() {
   );
 }
 
-const iconBtn = "flex h-[24px] w-[24px] items-center justify-center rounded-md text-faint transition-colors hover:bg-white/8 hover:text-ink";
-const navRow = "flex h-[34px] w-full items-center gap-2 rounded-lg px-2.5 text-left text-[13.5px] text-muted transition hover:bg-white/8 hover:text-ink";
+const iconBtn = "sidebar-hover flex h-[24px] w-[24px] items-center justify-center rounded-md text-faint transition-colors hover:text-ink";
+const navRow = "sidebar-hover flex h-[34px] w-full items-center gap-2 rounded-lg px-2.5 text-left text-[13.5px] text-muted transition hover:text-ink";
 
 interface ThreadGroup { label: string; threads: Thread[]; }
 
@@ -290,7 +290,7 @@ export function Sidebar() {
               return (
                 <li
                   key={t.id}
-                  className={`group relative z-10 mb-px flex h-[32px] cursor-pointer items-center gap-2 rounded-lg pl-2.5 pr-1.5 text-[13px] transition-colors ${active ? "bg-black/24 font-medium text-ink shadow-[inset_0_1px_rgba(255,255,255,0.06),0_1px_1px_rgba(0,0,0,0.18)]" : "text-muted hover:bg-white/8 hover:text-ink"}`}
+                  className={`group relative z-10 mb-px flex h-[32px] cursor-pointer items-center gap-2 rounded-lg pl-2.5 pr-1.5 text-[13px] transition-colors ${active ? "sidebar-active font-medium text-ink" : "sidebar-hover text-muted hover:text-ink"}`}
                   onClick={() => selectThread(t.id)}
                   onContextMenu={(e) => { e.preventDefault(); selectThread(t.id); showThreadMenu(t.id); }}
                 >
@@ -321,7 +321,7 @@ export function Sidebar() {
 
       <div className="mt-3 flex items-center gap-1 px-1 pb-1 pt-2" title="Active library">
         <button
-          className="flex h-[28px] w-[24px] shrink-0 items-center justify-center rounded-md text-faint transition hover:bg-white/8 hover:text-muted"
+          className="sidebar-hover flex h-[28px] w-[24px] shrink-0 items-center justify-center rounded-md text-faint transition hover:text-muted"
           title={docsOpen ? "Collapse documents" : "Expand documents"}
           aria-label={docsOpen ? "Collapse documents" : "Expand documents"}
           aria-expanded={docsOpen}
@@ -392,7 +392,7 @@ export function Sidebar() {
             return (
             <li
               key={d}
-              className="flex h-[27px] cursor-default items-center gap-1.5 overflow-hidden text-ellipsis whitespace-nowrap rounded-md px-2 text-[12.5px] text-muted transition-colors hover:bg-white/8 hover:text-ink"
+              className="sidebar-hover flex h-[27px] cursor-default items-center gap-1.5 overflow-hidden text-ellipsis whitespace-nowrap rounded-md px-2 text-[12.5px] text-muted transition-colors hover:text-ink"
               title={`${d}\n(double-click to open${SEP}right-click for options)`}
               onDoubleClick={() => openDoc(d)}
               onContextMenu={(e) => { e.preventDefault(); showDocMenu(d); }}
@@ -428,7 +428,7 @@ export function Sidebar() {
 
       <UpdateBanner />
 
-      <button className="relative z-10 mt-2 flex h-[34px] items-center gap-2 rounded-lg px-2.5 text-[13.5px] text-muted transition hover:bg-white/8 hover:text-ink" onClick={openSettings}>
+      <button className="sidebar-hover relative z-10 mt-2 flex h-[34px] items-center gap-2 rounded-lg px-2.5 text-[13.5px] text-muted transition hover:text-ink" onClick={openSettings}>
         <SettingsIcon />
         <span>Settings</span>
       </button>

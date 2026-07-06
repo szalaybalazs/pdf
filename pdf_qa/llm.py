@@ -270,6 +270,39 @@ def summarize_title(question: str, answer: str) -> str:
         return ""
 
 
+_FOLLOWUP_SYSTEM = (
+    "You suggest ONE natural follow-up question the user is likely to ask next, "
+    "based on the question they just asked and the answer they received about their "
+    "documents. It must be answerable from the same documents and move the topic "
+    "forward — not restate what was already answered. Reply with ONLY the question: "
+    "one short sentence (max ~12 words), no quotes, no prefix, ending with '?'."
+)
+
+
+def suggest_followup(question: str, answer: str) -> str:
+    """Suggest a single follow-up question for the last exchange, using the small,
+    cheap SUMMARY_MODEL. Best-effort: returns "" on any failure so the UI simply
+    keeps its default placeholder."""
+    if not answer.strip():
+        return ""
+    client, model = _title_client()
+    convo = (f"User asked: {question.strip()[:800]}\n\n"
+             f"Assistant answered: {answer.strip()[:1200]}")
+    try:
+        kw: dict = {"model": model, "max_tokens": 30,
+                    "messages": [{"role": "system", "content": _FOLLOWUP_SYSTEM},
+                                 {"role": "user", "content": convo}]}
+        if not _omits_temperature(model):
+            kw["temperature"] = 0.5
+        resp = client.chat.completions.create(**kw)
+        text = (resp.choices[0].message.content or "").strip().strip('"').strip()
+        # Collapse to a single line and cap length defensively.
+        text = " ".join(text.split())
+        return text[:120]
+    except Exception:
+        return ""
+
+
 _RERANK_SYSTEM = (
     "You are a passage reranker for a document Q&A system. Given a user question "
     "and a numbered list of candidate passages, decide which passages are most "

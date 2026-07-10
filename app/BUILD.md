@@ -35,6 +35,10 @@ platform (PyInstaller can't cross-compile anyway):
 - **Windows** — downloads the pinned UB-Mannheim installer and extracts it with
   **7-Zip**, which must be on PATH (`choco install 7zip` or `winget install 7zip.7zip`).
   Bump the version via `WIN_TESS_VERSION` / `WIN_TESS_URL`.
+- **Linux** — copies the system `tesseract` (`apt-get install tesseract-ocr` plus
+  the `tesseract-ocr-<lang>` packs) and the libraries it links, rewriting its RPATH
+  to `$ORIGIN/libs` with **`patchelf`** so the copy is relocatable inside the
+  AppImage/deb. Works on both `x86_64` and `aarch64` (64-bit Raspberry Pi OS).
 
 Languages bundled default to `eng osd`; override with `PDF_QA_BUNDLE_LANGS="eng deu …"`
 (must match `OCR_LANG` at runtime). Set `PDF_QA_SKIP_TESSERACT=1` to skip vendoring
@@ -183,20 +187,35 @@ the same step after its publish (see `.github/workflows/release.yml`).
 Per-platform installers without uploading:
 ```bash
 npm run dist:mac      # release/*.dmg + *.zip
-npm run dist:win      # release/*Setup*.exe   (run on Windows)
+npm run dist:win      # release/*Setup*.exe          (run on Windows)
+npm run dist -- --linux --x64      # release/*.AppImage + *.deb   (run on Linux x64)
 npm run dist          # current OS only, no upload
 ```
 
-Build the macOS artifacts on macOS and the Windows artifacts on Windows, each
-after running `npm run build:backend` on that same OS (the frozen backend is
-native code — PyInstaller cannot cross-compile, so you **cannot** build the
-Windows `.exe` on a Mac). Run `npm run publish` on each so both platforms'
-installers and manifests land in the same S3 path.
+Build the macOS artifacts on macOS, the Windows artifacts on Windows and the
+Linux artifacts on Linux, each after running `npm run build:backend` on that
+same OS **and arch** (the frozen backend is native code — PyInstaller cannot
+cross-compile, so you **cannot** build the Windows `.exe` on a Mac, nor an
+`arm64` build on an `x86_64` host). Run `npm run publish` on each so every
+platform's installers and manifests land in the same S3 path.
 
-## Releasing from CI (recommended — builds both OSes)
+### Raspberry Pi / Linux arm64
+64-bit Raspberry Pi OS (Pi 3/4/5) is `arm64` and is built by CI on a native
+`ubuntu-22.04-arm` runner — nothing extra to do. **32-bit** Pi OS (`armv7l`) is
+*not* built in CI (no GitHub-hosted 32-bit runner, and the backend can't be
+cross-frozen); build it on the Pi itself:
+```bash
+sudo apt-get install -y patchelf fakeroot tesseract-ocr tesseract-ocr-eng   # + other langs
+npm run build:backend
+cd app && npm run dist -- --linux --armv7l
+```
+(add `armv7l` to the `linux` target arch lists in `electron-builder.yml` first).
+
+## Releasing from CI (recommended — builds every OS)
 
 `.github/workflows/release.yml` builds, signs/notarizes and publishes **macOS
-(arm64)** and **Windows (x64)** on a version tag — no Windows machine needed.
+(arm64)**, **Windows (x64)** and **Linux (x64 + arm64)** on a version tag — no
+Windows, Linux or Raspberry Pi machine needed.
 
 ```bash
 cd app && npm version patch        # bumps package.json AND creates the git tag
@@ -223,6 +242,10 @@ Add these repository **Secrets** (Settings → Secrets and variables → Actions
 > Intel Macs aren't built (arm64 only). To add them, see the comment in the
 > matrix — both mac jobs would write `latest-mac.yml`, so they'd need merging.
 > **EV** Windows certs (hardware token) can't run in CI — build those locally.
+>
+> Linux needs no secrets beyond the AWS keys (AppImage/deb aren't code-signed);
+> the workflow's "Install Linux build dependencies" step apt-installs `patchelf`,
+> `fakeroot` and the `tesseract-ocr` language packs on the Linux runners only.
 
 ## How auto-update works at runtime
 - `src/updater.ts` runs only in a packaged build (`app.isPackaged`).

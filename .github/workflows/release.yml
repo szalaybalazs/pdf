@@ -1,8 +1,9 @@
 name: Release
 
 # Builds, signs/notarizes and publishes the desktop app to S3 (served via
-# update.szalay.me) for macOS (arm64) and Windows (x64). On a tag push it also
-# collects the installers from both runners and attaches them to a GitHub Release.
+# update.szalay.me) for macOS (arm64), Windows (x64) and Linux (x64 + arm64,
+# the latter covering 64-bit Raspberry Pi OS). On a tag push it also collects the
+# installers from every runner and attaches them to a GitHub Release.
 #
 # Trigger: push a tag like v0.0.2 *after* bumping app/package.json to the same
 # version (electron-updater compares against package.json's version, not the tag).
@@ -31,6 +32,17 @@ jobs:
           - os: windows-latest
             platform: win
             arch: x64
+          # Linux x86_64. Built on the oldest supported Ubuntu for the widest
+          # glibc compatibility (AppImage runs on hosts with glibc >= build host).
+          - os: ubuntu-22.04
+            platform: linux
+            arch: x64
+          # Linux arm64 — covers 64-bit Raspberry Pi OS (Pi 3/4/5) and other
+          # aarch64 boxes. Native GitHub-hosted arm64 runner (PyInstaller can
+          # only freeze on the target arch, so no cross-build / QEMU).
+          - os: ubuntu-22.04-arm
+            platform: linux
+            arch: arm64
 
     runs-on: ${{ matrix.os }}
 
@@ -51,6 +63,23 @@ jobs:
 
       - name: Install Python deps + PyInstaller
         run: python -m pip install --upgrade pip && pip install -r requirements.txt pyinstaller
+
+      # Linux build/OCR deps: patchelf (relocate tesseract in vendor-tesseract.sh),
+      # fakeroot (electron-builder deb packaging), and the tesseract engine + the
+      # traineddata packages for every language in PDF_QA_BUNDLE_LANGS. Package
+      # names use hyphens (chi-sim) though the traineddata is chi_sim.
+      - name: Install Linux build dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            patchelf fakeroot \
+            tesseract-ocr tesseract-ocr-osd \
+            tesseract-ocr-eng tesseract-ocr-deu tesseract-ocr-fra \
+            tesseract-ocr-spa tesseract-ocr-ita tesseract-ocr-por \
+            tesseract-ocr-nld tesseract-ocr-rus tesseract-ocr-ara \
+            tesseract-ocr-chi-sim tesseract-ocr-chi-tra \
+            tesseract-ocr-jpn tesseract-ocr-kor
 
       - name: Freeze backend (PyInstaller)
         shell: bash
@@ -105,6 +134,8 @@ jobs:
             app/release/*.dmg
             app/release/*.zip
             app/release/*.exe
+            app/release/*.AppImage
+            app/release/*.deb
             app/release/*.blockmap
             app/release/latest*.yml
           if-no-files-found: error

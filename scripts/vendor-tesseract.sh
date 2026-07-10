@@ -8,12 +8,18 @@
 #
 # PyInstaller can only freeze on the target OS, so the build host == the target
 # platform. This script therefore only ever vendors Tesseract for the CURRENT
-# OS: Homebrew + dylibbundler on macOS, the UB-Mannheim installer on Windows.
+# OS: Homebrew + dylibbundler on macOS, the UB-Mannheim installer on Windows,
+# the system (apt) tesseract + patchelf on Linux.
 #
 #   macOS   : downloads via Homebrew, then relocates dylibs with dylibbundler
 #             (@executable_path/libs) so the copy is independent of /opt/homebrew.
 #   Windows : downloads the pinned UB-Mannheim installer and extracts it with 7z
 #             (run under Git Bash / MSYS).
+#   Linux   : copies the system tesseract (apt: tesseract-ocr) plus the shared
+#             libraries it links, and rewrites its RPATH to $ORIGIN/libs so the
+#             folder is self-contained inside the AppImage/deb. Works for both
+#             x86_64 and aarch64 (64-bit Raspberry Pi OS); the build runs on a
+#             native runner of that arch. Requires `patchelf`.
 #
 # Languages bundled: $PDF_QA_BUNDLE_LANGS. The default set below mirrors the
 # user-selectable languages in app/src/languages.ts (a library's OCR language
@@ -95,6 +101,54 @@ vendor_windows() {
   rm -rf "$tmp"
 }
 
+# ----------------------------------------------------------------------------
+vendor_linux() {
+  echo "==> Vendoring Tesseract for Linux ($(uname -m))"
+  command -v tesseract >/dev/null 2>&1 || {
+    echo "ERROR: tesseract not found. Install with 'apt-get install tesseract-ocr' (+ language packs)." >&2
+    exit 1
+  }
+  command -v patchelf >/dev/null 2>&1 || {
+    echo "ERROR: patchelf required to make the copy relocatable. Install with 'apt-get install patchelf'." >&2
+    exit 1
+  }
+
+  local bin share
+  bin="$(command -v tesseract)"
+
+  cp "$bin" "$DEST/tesseract"
+  chmod +w "$DEST/tesseract"
+  mkdir -p "$DEST/libs"
+
+  # Bundle every shared lib the binary links against EXCEPT the core glibc set
+  # and the dynamic linker — those must come from the host (bundling them risks
+  # symbol-version clashes). Everything else (libtesseract, leptonica, libpng,
+  # libtiff, libjpeg, libwebp, libstdc++, libgomp, ...) is copied in.
+  ldd "$DEST/tesseract" | awk '/=> \//{print $3}' | while read -r lib; do
+    case "$lib" in
+      *ld-linux*|*/libc.so*|*/libm.so*|*/libpthread.so*|*/libdl.so*|*/librt.so*|*/libresolv.so*)
+        continue ;;
+    esac
+    cp -Ln "$lib" "$DEST/libs/" 2>/dev/null || true
+  done
+  # Look next to the bundled binary first, independent of the install prefix.
+  patchelf --set-rpath '$ORIGIN/libs' "$DEST/tesseract"
+
+  # Locate the tessdata dir (varies by tesseract major version / distro layout).
+  for c in \
+    "$(dirname "$bin")/../share/tessdata" \
+    /usr/share/tesseract-ocr/5/tessdata \
+    /usr/share/tesseract-ocr/4.00/tessdata \
+    /usr/share/tessdata \
+    /usr/share/tesseract-ocr/tessdata; do
+    if [ -d "$c" ]; then share="$c"; break; fi
+  done
+  [ -n "${share:-}" ] || { echo "ERROR: could not locate a tessdata directory" >&2; exit 1; }
+
+  copy_langs "$share"
+  copy_tessdata_extras "$share"
+}
+
 # Copy only the requested traineddata files to keep the bundle small.
 copy_langs() {
   local src="$1" lang
@@ -119,6 +173,7 @@ copy_tessdata_extras() {
 case "$(uname -s)" in
   Darwin) vendor_macos ;;
   MINGW*|MSYS*|CYGWIN*) vendor_windows ;;
+  Linux) vendor_linux ;;
   *) echo "==> $(uname -s): no Tesseract bundling configured; skipping (OCR will use a system tesseract if present)"; exit 0 ;;
 esac
 

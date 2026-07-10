@@ -91,6 +91,30 @@ nsis:
   installerIcon: build/icon.ico
   uninstallerIcon: build/icon.ico
 
+# --- Linux -------------------------------------------------------------------
+# Two targets per arch:
+#   AppImage — the primary, self-contained distributable and the ONLY Linux
+#              format electron-updater can auto-update (it reads latest-linux*.yml).
+#   deb      — for apt-based installs (Debian/Ubuntu/Raspberry Pi OS). Not
+#              auto-updatable; kept for users who prefer a system package.
+# arm64 covers 64-bit Raspberry Pi OS (Pi 3/4/5). 32-bit armv7l is NOT built in
+# CI (no GitHub-hosted 32-bit runner, and PyInstaller can only freeze on the
+# target arch) — build it on a self-hosted armv7l Pi with `electron-builder
+# --linux --armv7l` after freezing the backend there. See BUILD.md.
+linux:
+  icon: build/icon.png # 512x512+ PNG; electron-builder derives the icon set
+  category: Office
+  synopsis: Multimodal PDF chat
+  maintainer: Balázs Szalay <balazs@szalay.me>
+  target:
+    - target: AppImage
+      arch: [x64, arm64]
+    - target: deb
+      arch: [x64, arm64]
+
+appImage:
+  artifactName: "${productName}-${version}-${arch}.${ext}"
+
 # --- Release notes -----------------------------------------------------------
 # Embedded into the generated latest*.yml so electron-updater can surface them
 # (info.releaseNotes), and reused as the GitHub Release body in CI. Edit

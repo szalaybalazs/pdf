@@ -106,11 +106,15 @@ linux:
   category: Office
   synopsis: Multimodal PDF chat
   maintainer: Balázs Szalay <balazs@szalay.me>
+  # No `arch:` arrays here on purpose. When a target lists an explicit arch,
+  # electron-builder builds that whole list and IGNORES the CLI --x64/--arm64
+  # flag — which would build arm64 on the x64 runner (and vice-versa), embedding
+  # the wrong-arch frozen backend. Leaving arch off lets the per-runner
+  # `--<arch>` flag (see release.yml) drive it: each native runner builds only
+  # its own arch. Local `npm run dist` then builds just the host arch.
   target:
-    - target: AppImage
-      arch: [x64, arm64]
-    - target: deb
-      arch: [x64, arm64]
+    - AppImage
+    - deb
 
 appImage:
   artifactName: "${productName}-${version}-${arch}.${ext}"

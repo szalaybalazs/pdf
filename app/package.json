@@ -4,6 +4,7 @@
   "version": "0.0.24",
   "description": "Electron desktop shell for the pdf_qa multimodal chat (spawns the Python backend).",
   "author": "Balázs Szalay <balazs@szalay.me>",
+  "homepage": "https://update.szalay.me",
   "main": "dist/main.js",
   "scripts": {
     "build:main": "tsc -p tsconfig.main.json",

@@ -65,21 +65,28 @@ jobs:
         run: python -m pip install --upgrade pip && pip install -r requirements.txt pyinstaller
 
       # Linux build/OCR deps: patchelf (relocate tesseract in vendor-tesseract.sh),
-      # fakeroot (electron-builder deb packaging), and the tesseract engine + the
-      # traineddata packages for every language in PDF_QA_BUNDLE_LANGS. Package
-      # names use hyphens (chi-sim) though the traineddata is chi_sim.
+      # fakeroot (deb packaging), a native fpm (see below), and the tesseract
+      # engine + the traineddata packages for every language in
+      # PDF_QA_BUNDLE_LANGS. Package names use hyphens (chi-sim) though the
+      # traineddata is chi_sim.
+      #
+      # fpm: electron-builder ships an x86-only fpm to build .deb, which can't
+      # execute on the arm64 runner ("Exec format error"). Install a native fpm
+      # gem and point electron-builder at it with USE_SYSTEM_FPM=true (set in the
+      # publish step). Done on x64 too so both runners take the same path.
       - name: Install Linux build dependencies
         if: matrix.platform == 'linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            patchelf fakeroot \
+            patchelf fakeroot ruby ruby-dev build-essential \
             tesseract-ocr tesseract-ocr-osd \
             tesseract-ocr-eng tesseract-ocr-deu tesseract-ocr-fra \
             tesseract-ocr-spa tesseract-ocr-ita tesseract-ocr-por \
             tesseract-ocr-nld tesseract-ocr-rus tesseract-ocr-ara \
             tesseract-ocr-chi-sim tesseract-ocr-chi-tra \
             tesseract-ocr-jpn tesseract-ocr-kor
+          sudo gem install --no-document fpm
 
       - name: Freeze backend (PyInstaller)
         shell: bash
@@ -112,6 +119,10 @@ jobs:
           # Windows code-signing (ignored on the macOS runner).
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          # Use the fpm gem installed above instead of electron-builder's bundled
+          # x86-only fpm (which can't run on the arm64 runner). Only consulted for
+          # the Linux deb target; ignored on macOS/Windows.
+          USE_SYSTEM_FPM: "true"
 
       - name: Invalidate CloudFront cache
         shell: bash

@@ -205,11 +205,17 @@ platform's installers and manifests land in the same S3 path.
 *not* built in CI (no GitHub-hosted 32-bit runner, and the backend can't be
 cross-frozen); build it on the Pi itself:
 ```bash
-sudo apt-get install -y patchelf fakeroot tesseract-ocr tesseract-ocr-eng   # + other langs
+sudo apt-get install -y patchelf fakeroot ruby ruby-dev build-essential \
+  tesseract-ocr tesseract-ocr-eng          # + any other langs you bundle
+sudo gem install --no-document fpm         # electron-builder's bundled fpm is x86-only
 npm run build:backend
-cd app && npm run dist -- --linux --armv7l
+cd app && USE_SYSTEM_FPM=true npm run dist -- --linux --armv7l
 ```
-(add `armv7l` to the `linux` target arch lists in `electron-builder.yml` first).
+`USE_SYSTEM_FPM=true` is required on any ARM host for the `.deb` (the bundled
+fpm can't run on ARM); it's harmless for AppImage-only builds. On a 64-bit Pi
+use `--arm64` instead. To build the `.deb` at all, keep it in the `linux.target`
+list (and for armv7l, `electron-builder` picks the arch up from the `--armv7l`
+flag — no config change needed).
 
 ## Releasing from CI (recommended — builds every OS)
 

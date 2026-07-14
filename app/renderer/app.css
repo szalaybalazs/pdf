@@ -71,7 +71,19 @@
       --sidebar-active-shadow: inset 0 1px rgba(255, 255, 255, .06), 0 1px 1px rgba(0, 0, 0, .18);
     }
   }
-  html, body { height: 100%; margin: 0; }
+html, body { height: 100%; margin: 0; }
+body.web-view-body {
+  height: 100dvh;
+  overflow: hidden;
+  overscroll-behavior: none;
+  position: fixed;
+  inset: 0;
+  width: 100%;
+}
+body.web-view-body #root {
+  height: 100%;
+  overflow: hidden;
+}
   body {
     background: transparent; color: var(--color-ink);
     font-family: var(--font-sans); font-size: 14px;
@@ -122,46 +134,139 @@
 .modal-scrim { background: var(--modal-scrim-bg); }
 .sidebar-sheet-layer {
   top: 46px;
+  bottom: 0;
+  overflow: hidden;
+  overscroll-behavior: contain;
 }
 .sidebar-sheet {
-  height: calc(100vh - 46px);
+  height: calc(100dvh - 46px);
   background: var(--chrome-bg);
   border-right: 1px solid var(--color-border);
   box-shadow: 0 18px 42px rgba(20, 20, 18, .22);
+  overflow: hidden;
 }
 
 @media (max-width: 760px) {
+  .web-view {
+    height: 100dvh;
+    max-height: 100dvh;
+  }
+  .web-view .window-header {
+    height: 44px;
+    border-bottom: 1px solid var(--color-border);
+  }
   .web-view .window-header .main-chrome {
-    padding-left: 12px;
-    padding-right: 12px;
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+  .web-view .window-header > .main-chrome:first-child {
+    flex: 0 0 44px;
+    width: 44px;
+    min-width: 44px;
   }
   .web-view .window-header .main-chrome:last-child {
-    max-width: 132px;
-    padding-right: 10px;
+    flex: 0 0 44px;
+    max-width: 44px;
+    padding-left: 0;
+    padding-right: 8px;
+  }
+  .web-view .window-header .main-chrome:last-child > span,
+  .web-view .window-header .main-chrome:last-child > [aria-label="Working"] {
+    display: none;
+  }
+  .web-view .window-header .main-chrome:last-child button {
+    margin-left: 0;
+  }
+  .web-view .window-header > .main-chrome:nth-child(2) {
+    padding-left: 4px;
+    padding-right: 4px;
+  }
+  .web-view .window-header > .main-chrome:nth-child(2) span {
+    max-width: 38vw;
+  }
+  .web-view .app-content {
+    min-height: 0;
+    overflow: hidden;
+  }
+  .web-view .main-chrome {
+    min-height: 0;
+  }
+  .web-view .messages-scroll {
+    padding-top: 18px;
+    padding-bottom: 18px;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
   }
   .web-view .chat-message-row,
   .web-view .chat-divider {
-    padding-left: 16px;
-    padding-right: 16px;
-  }
-  .web-view .user-bubble {
-    max-width: 94%;
-    font-size: 14px;
-  }
-  .web-view .composer-footer {
-    padding-left: 12px;
-    padding-right: 12px;
-    padding-bottom: 12px;
-  }
-  .web-view .composer-shell {
-    min-height: 88px;
-    border-radius: 18px;
     padding-left: 14px;
     padding-right: 14px;
+  }
+  .web-view .user-bubble {
+    max-width: 96%;
+    font-size: 14px;
+    border-radius: 16px;
+    padding: 9px 12px;
+  }
+  .web-view .composer-footer {
+    padding: 8px 10px max(10px, env(safe-area-inset-bottom));
+    border-top: 1px solid var(--color-border);
+  }
+  .web-view .composer-shell {
+    min-height: 76px;
+    border-radius: 16px;
+    padding: 10px 12px 8px;
+  }
+  .web-view .composer-shell textarea {
+    min-height: 34px;
+    max-height: 34dvh;
+    font-size: 14px;
+  }
+  .web-view .composer-meta {
+    min-height: 28px;
+    gap: 8px;
+  }
+  .web-view .model-button {
+    max-width: calc(100vw - 116px);
+    font-size: 11.5px;
+  }
+  .web-view .token-meter {
+    display: none;
+  }
+  .web-view .doc-meter {
+    font-size: 10.5px;
+    white-space: nowrap;
   }
   .web-view .empty-chat-title {
     margin-bottom: 20px;
     font-size: 21px;
+  }
+  .web-view .empty-chat {
+    justify-content: flex-end;
+    padding-bottom: 18dvh;
+  }
+  .web-view .sidebar-sheet-layer {
+    top: 44px;
+  }
+  .web-view .sidebar-sheet {
+    width: min(86vw, 340px);
+    min-width: 0;
+    max-width: 86vw;
+    height: calc(100dvh - 44px);
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  .web-view .sidebar-sheet .sidebar-thread-list {
+    flex: 0 0 auto;
+    overflow: visible;
+    padding-right: 0;
+  }
+  .web-view .sidebar-sheet .sidebar-doc-list {
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
   }
 }
 

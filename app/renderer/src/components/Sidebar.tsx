@@ -275,7 +275,7 @@ export function Sidebar({ sheet = false, onRequestClose }: { sheet?: boolean; on
       </label>
 
       <div className="relative z-10 mb-2 px-2 text-[13px] font-medium text-muted">Conversations</div>
-      <ul className="min-h-0 flex-1 list-none overflow-y-auto pr-1">
+      <ul className="sidebar-thread-list min-h-0 flex-1 list-none overflow-y-auto pr-1">
         {searching && threads.length === 0 && <li className="px-2.5 py-2 text-[12.5px] text-faint">No matching chats</li>}
         {threadGroups.map((group) => (
           <React.Fragment key={group.label}>
@@ -391,7 +391,7 @@ export function Sidebar({ sheet = false, onRequestClose }: { sheet?: boolean; on
       </div>
 
       {docsOpen && (
-        <ul className="max-h-[26vh] list-none overflow-y-auto pr-1">
+        <ul className="sidebar-doc-list max-h-[26vh] list-none overflow-y-auto pr-1">
           {docs.length === 0 && <li className="px-2.5 py-1.5 text-[12px] text-faint">No PDFs indexed</li>}
           {docs.map((d) => {
             const isTemp = !!activeThread()?.tempDocs?.includes(d);

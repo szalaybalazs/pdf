@@ -414,6 +414,12 @@ export function App() {
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
 
   useEffect(() => {
+    if (!IS_REMOTE) return;
+    document.body.classList.add("web-view-body");
+    return () => document.body.classList.remove("web-view-body");
+  }, []);
+
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "n") {
         e.preventDefault();

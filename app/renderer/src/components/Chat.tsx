@@ -82,13 +82,13 @@ function Messages() {
 
   if (!t || t.messages.length === 0) {
     return (
-      <section ref={scrollerRef} onScroll={onScroll} style={scrollerStyle} className="min-h-0 flex-1 overflow-y-auto px-0 py-8">
+      <section ref={scrollerRef} onScroll={onScroll} style={scrollerStyle} className="messages-scroll min-h-0 flex-1 overflow-y-auto px-0 py-8">
       </section>
     );
   }
 
   return (
-    <section ref={scrollerRef} onScroll={onScroll} style={scrollerStyle} className="min-h-0 flex-1 overflow-y-auto px-0 py-8">
+    <section ref={scrollerRef} onScroll={onScroll} style={scrollerStyle} className="messages-scroll min-h-0 flex-1 overflow-y-auto px-0 py-8">
       {(() => {
         // Insert a subtle divider whenever the library OR the answering model
         // changes mid-thread, so a shift in the model's context is impossible to
@@ -185,9 +185,9 @@ function Composer({ centered = false }: { centered?: boolean }) {
             />
           </div>
 
-          <div className="mt-2 flex min-h-[30px] flex-wrap items-center gap-3">
+          <div className="composer-meta mt-2 flex min-h-[30px] flex-wrap items-center gap-3">
             <button
-              className="max-w-full cursor-pointer truncate px-0 py-0.5 text-left font-mono text-[12px] text-muted outline-none transition hover:text-ink focus:text-ink disabled:cursor-default disabled:opacity-60"
+              className="model-button max-w-full cursor-pointer truncate px-0 py-0.5 text-left font-mono text-[12px] text-muted outline-none transition hover:text-ink focus:text-ink disabled:cursor-default disabled:opacity-60"
               title="Answer model"
               disabled={!store.models.length}
               onClick={() => { void showModelMenu(); }}
@@ -196,12 +196,12 @@ function Composer({ centered = false }: { centered?: boolean }) {
             </button>
             <span className="flex-1" />
             {tok.total > 0 && (
-              <span className="font-mono text-[11px] text-faint" title="Tokens used this session">
+              <span className="token-meter font-mono text-[11px] text-faint" title="Tokens used this session">
                 {tok.total.toLocaleString()} tok ({tok.prompt.toLocaleString()} in / {tok.completion.toLocaleString()} out){SEP}{tok.queries} q
               </span>
             )}
             {docCount > 0 && (
-              <span className={`font-mono text-[11px] ${noDocsEnabled ? "text-danger" : "text-faint"}`} title="Documents searched by this chat">
+              <span className={`doc-meter font-mono text-[11px] ${noDocsEnabled ? "text-danger" : "text-faint"}`} title="Documents searched by this chat">
                 {enabledDocCount}/{docCount} docs
               </span>
             )}
@@ -269,7 +269,7 @@ export function Chat() {
       }}
     >
       {empty ? (
-        <div className="flex min-h-0 flex-1 flex-col items-center justify-center pb-[13vh]">
+        <div className="empty-chat flex min-h-0 flex-1 flex-col items-center justify-center pb-[13vh]">
           <div className="empty-chat-title mb-7 px-6 text-center text-[24px] font-medium text-ink">
             What would you like to know?
           </div>

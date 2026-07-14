@@ -6,7 +6,7 @@
  * The router is created from a `RouterDeps` bundle so all Electron-specific
  * side effects live in main.ts and this module stays a thin, typed surface.
  */
-import { initTRPC } from "@trpc/server";
+import { initTRPC, TRPCError } from "@trpc/server";
 import { observable } from "@trpc/server/observable";
 import { z } from "zod";
 import type { EventEmitter } from "events";
@@ -17,6 +17,7 @@ export interface AppSettings {
   localModels: LocalModelSettings[];
   bedrockApiKey: string; bedrockRegion: string;
   analyticsEnabled: boolean;
+  remoteEnabled: boolean; remotePort: number; remoteUsername: string; remotePassword: string;
 }
 export interface LocalModelSettings { baseUrl: string; apiKey: string; model: string; textOnly: boolean; }
 export interface ModelMenuItem { id: string; label: string; provider?: string; model?: string; via_openrouter?: boolean; }
@@ -38,7 +39,7 @@ export interface RouterDeps {
   markServeSubscribed: () => void;
   sendToBackend: (req: unknown) => void;
   getSettings: () => Promise<AppSettings>;
-  setSettings: (s: { openaiKey: string; anthropicKey: string; openrouterKey: string; systemPrompt: string; localBaseUrl: string; localApiKey: string; localModel: string; localModels: LocalModelSettings[]; bedrockApiKey: string; bedrockRegion: string; analyticsEnabled: boolean }) => Promise<{ ok: boolean }>;
+  setSettings: (s: { openaiKey: string; anthropicKey: string; openrouterKey: string; systemPrompt: string; localBaseUrl: string; localApiKey: string; localModel: string; localModels: LocalModelSettings[]; bedrockApiKey: string; bedrockRegion: string; analyticsEnabled: boolean; remoteEnabled: boolean; remotePort: number; remoteUsername: string; remotePassword: string }) => Promise<{ ok: boolean }>;
   openFigure: (filePath: string) => Promise<string>;
   openDoc: (name: string) => Promise<string>;
   removeDoc: (name: string) => Promise<void>;
@@ -65,7 +66,20 @@ export interface RouterDeps {
   track: (event: string, props?: Record<string, string | number | boolean>) => void;  // renderer-originated analytics
 }
 
-const t = initTRPC.create({ isServer: true });
+// Per-connection context. `remote: true` marks calls arriving over the HTTPS/
+// WebSocket bridge (a browser); the local Electron window is `remote: false`.
+export interface AppContext { remote: boolean }
+
+const t = initTRPC.context<AppContext>().create({ isServer: true });
+
+// Procedures that must never be reachable from a remote browser (they expose or
+// mutate secrets, or drive host-only OS actions). Remote calls are rejected at
+// the server, so hiding the UI is defence-in-depth, not the only guard.
+const localOnly = t.middleware(({ ctx, next }) => {
+  if (ctx.remote) throw new TRPCError({ code: "FORBIDDEN", message: "Not available on remote web access." });
+  return next();
+});
+const localProcedure = t.procedure.use(localOnly);
 
 const keys = z.object({
   openaiKey: z.string(),
@@ -84,14 +98,18 @@ const keys = z.object({
   bedrockApiKey: z.string().default(""),
   bedrockRegion: z.string().default(""),
   analyticsEnabled: z.boolean().default(true),
+  remoteEnabled: z.boolean().default(false),
+  remotePort: z.number().int().min(1).max(65535).default(8443),
+  remoteUsername: z.string().default("admin"),
+  remotePassword: z.string().default(""),
 });
 
 export function createAppRouter(deps: RouterDeps) {
   return t.router({
     // --- one-shot actions ---------------------------------------------------
     sendRequest: t.procedure.input(z.any()).mutation(({ input }) => { deps.sendToBackend(input); return true; }),
-    getSettings: t.procedure.query(() => deps.getSettings()),
-    setSettings: t.procedure.input(keys).mutation(({ input }) => deps.setSettings(input)),
+    getSettings: localProcedure.query(() => deps.getSettings()),
+    setSettings: localProcedure.input(keys).mutation(({ input }) => deps.setSettings(input)),
     openFigure: t.procedure.input(z.string()).mutation(({ input }) => deps.openFigure(input)),
     openDoc: t.procedure.input(z.string()).mutation(({ input }) => deps.openDoc(input)),
     removeDoc: t.procedure.input(z.string()).mutation(async ({ input }) => { await deps.removeDoc(input); return true; }),

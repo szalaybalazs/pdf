@@ -8,7 +8,7 @@
 import { useSyncExternalStore } from "react";
 import { api } from "./trpc";
 import type { UpdateState } from "./trpc";
-import { SEP } from "./platform";
+import { SEP, IS_REMOTE } from "./platform";
 import { threadToMarkdown, threadFilename } from "./export";
 import type {
   Thread, AssistantMsg, ModelOption, Source, Usage,
@@ -598,7 +598,10 @@ export function removeDoc(name: string): void {
 }
 
 // ---- settings --------------------------------------------------------------
-export function openSettings(): void { store.settingsOpen = true; bump(); }
+export function openSettings(): void {
+  if (IS_REMOTE) return;   // settings are never available to remote web clients
+  store.settingsOpen = true; bump();
+}
 export function closeSettings(): void { store.settingsOpen = false; bump(); }
 export function openLibrarySettings(name = store.activeCollection): void { store.librarySettings = name; bump(); }
 export function closeLibrarySettings(): void { store.librarySettings = null; bump(); }

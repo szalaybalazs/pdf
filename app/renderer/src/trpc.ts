@@ -44,6 +44,7 @@ export const api = {
     localModels: { baseUrl: string; apiKey: string; model: string; textOnly: boolean }[];
     bedrockApiKey: string; bedrockRegion: string;
     analyticsEnabled: boolean;
+    remoteEnabled: boolean; remotePort: number; remoteUsername: string; remotePassword: string;
   }) =>
     trpc.setSettings.mutate(s),
   onServeEvent: (cb: (e: any) => void) => { trpc.serveEvents.subscribe(undefined, { onData: cb }); },

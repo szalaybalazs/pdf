@@ -120,6 +120,50 @@
   background: var(--chrome-bg);
 }
 .modal-scrim { background: var(--modal-scrim-bg); }
+.sidebar-sheet-layer {
+  top: 46px;
+}
+.sidebar-sheet {
+  height: calc(100vh - 46px);
+  background: var(--chrome-bg);
+  border-right: 1px solid var(--color-border);
+  box-shadow: 0 18px 42px rgba(20, 20, 18, .22);
+}
+
+@media (max-width: 760px) {
+  .web-view .window-header .main-chrome {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+  .web-view .window-header .main-chrome:last-child {
+    max-width: 132px;
+    padding-right: 10px;
+  }
+  .web-view .chat-message-row,
+  .web-view .chat-divider {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .web-view .user-bubble {
+    max-width: 94%;
+    font-size: 14px;
+  }
+  .web-view .composer-footer {
+    padding-left: 12px;
+    padding-right: 12px;
+    padding-bottom: 12px;
+  }
+  .web-view .composer-shell {
+    min-height: 88px;
+    border-radius: 18px;
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+  .web-view .empty-chat-title {
+    margin-bottom: 20px;
+    font-size: 21px;
+  }
+}
 
 /* --- animations shared by streaming cursor / pending bullet / spinner ------- */
 @keyframes blink { to { opacity: .2; } }

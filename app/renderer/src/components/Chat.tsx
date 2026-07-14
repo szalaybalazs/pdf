@@ -5,7 +5,7 @@ import {
 } from "../store";
 import { Assistant } from "./Assistant";
 import { APP_NAME } from "../../../src/branding";
-import { platformText, SEP } from "../platform";
+import { platformText, SEP, IS_REMOTE } from "../platform";
 
 function Messages() {
   const t = activeThread();
@@ -99,7 +99,7 @@ function Messages() {
         let prevLib: string | undefined;
         let prevModel: string | undefined;
         const divider = (text: string, key: string) => (
-          <div className="mx-auto my-4 flex max-w-[920px] items-center gap-3 px-8 text-[11.5px] text-faint" key={key}>
+            <div className="chat-divider mx-auto my-4 flex max-w-[920px] items-center gap-3 px-8 text-[11.5px] text-faint" key={key}>
             <div className="h-px flex-1 bg-border" />
             <span className="whitespace-nowrap">{text}</span>
             <div className="h-px flex-1 bg-border" />
@@ -119,8 +119,8 @@ function Messages() {
             prevModel = m.model;
           }
           const body = m.kind === "user" ? (
-            <div className="mx-auto mb-6 flex max-w-[920px] flex-col items-end px-8" key={i}>
-              <div className="max-w-[82%] whitespace-pre-wrap rounded-[20px] bg-surface-2 px-4 py-2.5 text-[15px] leading-relaxed text-ink shadow-[0_1px_1px_rgba(20,20,18,0.03)]">{m.text}</div>
+            <div className="chat-message-row mx-auto mb-6 flex max-w-[920px] flex-col items-end px-8" key={i}>
+              <div className="user-bubble max-w-[82%] whitespace-pre-wrap rounded-[20px] bg-surface-2 px-4 py-2.5 text-[15px] leading-relaxed text-ink shadow-[0_1px_1px_rgba(20,20,18,0.03)]">{m.text}</div>
             </div>
           ) : (
             <Assistant m={m} key={m.reqId || i} />
@@ -164,7 +164,7 @@ function Composer({ centered = false }: { centered?: boolean }) {
   };
 
   return (
-    <footer className={centered ? "w-full px-6" : "shrink-0 bg-bg px-7 pb-5 pt-2"}>
+    <footer className={centered ? "composer-footer w-full px-6" : "composer-footer shrink-0 bg-bg px-7 pb-5 pt-2"}>
       <div className="flex flex-col items-center">
         <div className="composer-shell flex min-h-[96px] w-full max-w-[920px] flex-col rounded-[24px] border px-4.5 pb-2.5 pt-3.5 transition focus-within:border-border-strong">
           <div className="flex flex-1 items-start">
@@ -243,6 +243,7 @@ export function Chat() {
     <main
       className="main-chrome relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
       onDragEnter={(e) => {
+        if (IS_REMOTE) return;   // upload is disabled for remote web clients
         if (!Array.from(e.dataTransfer.types).includes("Files")) return;
         e.preventDefault();
         dragDepth.current += 1;
@@ -260,6 +261,7 @@ export function Chat() {
         if (dragDepth.current === 0) setDragging(false);
       }}
       onDrop={(e) => {
+        if (IS_REMOTE) return;   // upload is disabled for remote web clients
         e.preventDefault();
         dragDepth.current = 0;
         setDragging(false);
@@ -268,7 +270,7 @@ export function Chat() {
     >
       {empty ? (
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center pb-[13vh]">
-          <div className="mb-7 px-6 text-center text-[24px] font-medium text-ink">
+          <div className="empty-chat-title mb-7 px-6 text-center text-[24px] font-medium text-ink">
             What would you like to know?
           </div>
           <Composer centered />

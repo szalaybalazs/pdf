@@ -7,7 +7,7 @@ import {
   switchCollection, openLibrarySettings, threadLibraries, libraryLabel,
 } from "../store";
 import type { Thread } from "../types";
-import { SEP } from "../platform";
+import { SEP, IS_REMOTE } from "../platform";
 
 function SearchIcon() {
   return (
@@ -239,7 +239,7 @@ function IngestProgress() {
   );
 }
 
-export function Sidebar() {
+export function Sidebar({ sheet = false, onRequestClose }: { sheet?: boolean; onRequestClose?: () => void }) {
   const [docsOpen, setDocsOpen] = useState(false);
   const threads = visibleThreads();
   const threadGroups = groupThreadsByDate(threads);
@@ -248,13 +248,17 @@ export function Sidebar() {
   const docs = threadDocs();
   const enabledCount = enabledDocs().length;
   const showStatus = working || store.statusErr;
+  const closeSheet = () => { if (sheet) onRequestClose?.(); };
+  const sidebarClass = sheet
+    ? "sidebar-chrome sidebar-sheet flex min-h-0 w-[300px] min-w-[300px] max-w-[calc(100vw-40px)] shrink-0 flex-col px-3 pb-3 pt-3"
+    : "sidebar-chrome relative z-30 flex min-h-0 w-[300px] min-w-[300px] shrink-0 flex-col px-3 pb-3 pt-3";
 
   return (
-    <aside className="sidebar-chrome relative z-30 flex min-h-0 w-[300px] min-w-[300px] shrink-0 flex-col px-3 pb-3 pt-3">
+    <aside className={sidebarClass}>
       <button
         className={`${navRow} font-medium text-ink`}
         title="New chat (⌘N)"
-        onClick={() => newThread(true)}
+        onClick={() => { newThread(true); closeSheet(); }}
       >
         <EditIcon />
         <span>New chat</span>
@@ -291,7 +295,7 @@ export function Sidebar() {
                 <li
                   key={t.id}
                   className={`group relative z-10 mb-px flex h-[32px] cursor-pointer items-center gap-2 rounded-lg pl-2.5 pr-1.5 text-[13px] transition-colors ${active ? "sidebar-active font-medium text-ink" : "sidebar-hover text-muted hover:text-ink"}`}
-                  onClick={() => selectThread(t.id)}
+                  onClick={() => { selectThread(t.id); closeSheet(); }}
                   onContextMenu={(e) => { e.preventDefault(); selectThread(t.id); showThreadMenu(t.id); }}
                 >
                   {t.busy && <SidebarSpinner />}
@@ -334,7 +338,7 @@ export function Sidebar() {
             className="min-w-0 flex-1 cursor-pointer appearance-none truncate border-none bg-transparent px-0 py-1 font-mono text-[12px] text-muted outline-none transition hover:text-ink focus:text-ink"
             title="Active library"
             value={store.activeCollection}
-            onChange={(e) => switchCollection(e.target.value)}
+            onChange={(e) => { switchCollection(e.target.value); closeSheet(); }}
           >
             {store.collections.map((c) => {
               // Remote libraries don't carry a doc count in the list (it would
@@ -375,13 +379,15 @@ export function Sidebar() {
             className={iconBtn}
             title="Library settings (rename, OCR language)"
             aria-label="Library settings"
-            onClick={() => openLibrarySettings()}
+            onClick={() => { openLibrarySettings(); closeSheet(); }}
           ><SettingsIcon /></button>
         )}
-        <button
-          className={iconBtn}
-          title="Add PDFs to the index" onClick={() => void addPdfs()}
-        ><PlusIcon /></button>
+        {!IS_REMOTE && (
+          <button
+            className={iconBtn}
+            title="Add PDFs to the index" onClick={() => void addPdfs()}
+          ><PlusIcon /></button>
+        )}
       </div>
 
       {docsOpen && (
@@ -428,10 +434,12 @@ export function Sidebar() {
 
       <UpdateBanner />
 
-      <button className="sidebar-hover relative z-10 mt-2 flex h-[34px] items-center gap-2 rounded-lg px-2.5 text-[13.5px] text-muted transition hover:text-ink" onClick={openSettings}>
-        <SettingsIcon />
-        <span>Settings</span>
-      </button>
+      {!IS_REMOTE && (
+        <button className="sidebar-hover relative z-10 mt-2 flex h-[34px] items-center gap-2 rounded-lg px-2.5 text-[13.5px] text-muted transition hover:text-ink" onClick={() => { openSettings(); closeSheet(); }}>
+          <SettingsIcon />
+          <span>Settings</span>
+        </button>
+      )}
     </aside>
   );
 }

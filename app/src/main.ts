@@ -17,6 +17,7 @@ import { createIPCHandler } from "electron-trpc/main";
 import logger from "electron-log/main";
 import { readSettings, writeSettings, Settings } from "./settings";
 import { createAppRouter, RouterDeps } from "./trpc";
+import { startWebServer, WebServerHandle } from "./webserver";
 import { checkForUpdates, initAutoUpdater, installDownloadedUpdate, getUpdateState } from "./updater";
 import type { UpdateState } from "./trpc";
 import { APP_NAME } from "./branding";
@@ -693,7 +694,7 @@ function createWindow(): void {
     },
   });
   // Attach the tRPC IPC handler to this window's webContents.
-  createIPCHandler({ router: appRouter, windows: [win] });
+  createIPCHandler({ router: appRouter, windows: [win], createContext: async () => ({ remote: false }) });
   win.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
   win.once("ready-to-show", () => win?.show());
   win.webContents.on("did-finish-load", () => log("info", "renderer loaded"));
@@ -804,6 +805,45 @@ function restartBackend(): void {
     serve.kill();
   }
   startBackend();
+}
+
+// --- remote web access (HTTPS + Basic Auth, serving the same tRPC router) -----
+let webServer: WebServerHandle | null = null;
+
+// (Re)start or stop the remote web server to match current settings. Called on
+// boot and whenever settings are saved. A server with no password is never
+// started — Basic Auth with an empty password would be effectively open.
+async function syncWebServer(): Promise<void> {
+  if (webServer) {
+    try { await webServer.close(); } catch (e) { log("warn", "web server close failed", (e as Error).message); }
+    webServer = null;
+  }
+  const s = readSettings();
+  if (!s.remoteEnabled) return;
+  if (!s.remotePassword) {
+    log("warn", "remote web access enabled but no password set; not starting server");
+    return;
+  }
+  try {
+    webServer = startWebServer({
+      router: appRouter,
+      getConfig: () => {
+        const cur = readSettings();
+        return { port: cur.remotePort, username: cur.remoteUsername || "admin", password: cur.remotePassword };
+      },
+      assets: {
+        webBundle: path.join(__dirname, "renderer.web.js"),
+        webBundleMap: path.join(__dirname, "renderer.web.js.map"),
+        stylesCss: path.join(__dirname, "..", "renderer", "styles.css"),
+        vendorDir: path.join(__dirname, "..", "renderer", "vendor"),
+      },
+      certDir: app.getPath("userData"),
+      log,
+    });
+    track("remote_web_started", { port: s.remotePort });
+  } catch (e) {
+    log("error", "failed to start remote web server", (e as Error).message);
+  }
 }
 
 // Read a rendered page image as a data URL for the in-app viewer. Guarded to the
@@ -1311,6 +1351,10 @@ async function setSettingsAction(s: Settings): Promise<{ ok: boolean }> {
     bedrockApiKey: s.bedrockApiKey || "",
     bedrockRegion: s.bedrockRegion || "",
     analyticsEnabled: s.analyticsEnabled !== false,
+    remoteEnabled: !!s.remoteEnabled,
+    remotePort: Number.isFinite(s.remotePort) ? s.remotePort : 8443,
+    remoteUsername: s.remoteUsername || "admin",
+    remotePassword: s.remotePassword || "",
   });
   setAnalyticsEnabled(s.analyticsEnabled !== false);       // honor opt-in/out without a restart
   setErrorReportingEnabled(s.analyticsEnabled !== false);  // same toggle gates Sentry too
@@ -1326,6 +1370,7 @@ async function setSettingsAction(s: Settings): Promise<{ ok: boolean }> {
     analytics_enabled: s.analyticsEnabled !== false,
   });
   restartBackend(); // respawn so the Python backend picks up the new keys
+  void syncWebServer(); // apply remote-access changes (start/stop/rebind)
   return { ok: true };
 }
 
@@ -1618,6 +1663,7 @@ app.whenReady().then(() => {
   startBackend();
   installApplicationMenu();
   createWindow();
+  void syncWebServer();   // start the remote web server if enabled in settings
   initAutoUpdater(() => win, log, (s: UpdateState) => {
     if (s.status === "downloaded") track("update_downloaded", s.version ? { version: s.version } : {});
     bus.emit("update-event", s);
@@ -1630,5 +1676,11 @@ app.whenReady().then(() => {
 app.on("window-all-closed", () => {
   log("info", "all windows closed; shutting down backend");
   if (serve) serve.kill();
+  // Keep the remote web server up while the app stays resident (macOS), so a
+  // remote client isn't dropped just because the local window was closed.
   if (process.platform !== "darwin") app.quit();
+});
+
+app.on("before-quit", () => {
+  if (webServer) { void webServer.close(); webServer = null; }
 });

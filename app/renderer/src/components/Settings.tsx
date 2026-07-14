@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { store, closeSettings } from "../store";
 import { api } from "../trpc";
+import { IS_REMOTE } from "../platform";
 
 const labelCls = "mb-1.5 mt-2.5 text-[12px] font-medium text-muted";
 const inputCls = "w-full rounded-lg border border-border-strong bg-surface px-3 py-2.5 font-mono text-[13px] text-ink outline-none transition focus:border-tint focus:ring-[3px] focus:ring-tint/15";
@@ -24,6 +25,10 @@ export function Settings() {
   const [bedrockApiKey, setBedrockApiKey] = useState("");
   const [bedrockRegion, setBedrockRegion] = useState("");
   const [analyticsEnabled, setAnalyticsEnabled] = useState(true);
+  const [remoteEnabled, setRemoteEnabled] = useState(false);
+  const [remotePort, setRemotePort] = useState(8443);
+  const [remoteUsername, setRemoteUsername] = useState("admin");
+  const [remotePassword, setRemotePassword] = useState("");
   const [dataDir, setDataDir] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -46,6 +51,10 @@ export function Settings() {
       setBedrockApiKey(s.bedrockApiKey || "");
       setBedrockRegion(s.bedrockRegion || "");
       setAnalyticsEnabled(s.analyticsEnabled !== false);
+      setRemoteEnabled(!!s.remoteEnabled);
+      setRemotePort(Number.isFinite(s.remotePort) ? s.remotePort : 8443);
+      setRemoteUsername(s.remoteUsername || "admin");
+      setRemotePassword(s.remotePassword || "");
       setDataDir(s.dataDir || "");
     }).catch(() => { /* show empty form */ });
     return () => { alive = false; };
@@ -75,6 +84,7 @@ export function Settings() {
         localModels: cleanedLocalModels,
         bedrockApiKey: bedrockApiKey.trim(), bedrockRegion: bedrockRegion.trim(),
         analyticsEnabled,
+        remoteEnabled, remotePort, remoteUsername: remoteUsername.trim() || "admin", remotePassword,
       });
       store.statusErr = false;
       store.status = "reconnecting to backend…";   // next "ready" overwrites this
@@ -183,6 +193,44 @@ export function Settings() {
         <div className="mt-1 text-[11.5px] leading-snug text-faint">
           Set a region where your chosen models are enabled (model access granted in the Bedrock console).
         </div>
+
+        {!IS_REMOTE && (
+          <>
+            <div className="mt-5 mb-1 border-t border-border-strong pt-4 text-[13px] font-semibold tracking-tight text-ink">
+              Remote web access
+            </div>
+            <div className="mb-1 text-[11.5px] leading-snug text-faint">
+              Serve this app over HTTPS to a browser (phone or another computer) on your network,
+              protected by a username &amp; password. Uploading files is disabled remotely. The
+              certificate is self-signed, so browsers show a one-time security warning to click through.
+            </div>
+            <label className="mt-2 flex items-center gap-2 text-[12px] text-ink">
+              <input type="checkbox" checked={remoteEnabled}
+                onChange={(e) => setRemoteEnabled(e.target.checked)} />
+              Enable remote web access
+            </label>
+
+            <label className={labelCls}>Port</label>
+            <input className={inputCls} type="number" min={1} max={65535} autoComplete="off" spellCheck={false}
+              placeholder="8443" value={remotePort}
+              onChange={(e) => setRemotePort(parseInt(e.target.value, 10) || 8443)} />
+
+            <label className={labelCls}>Username</label>
+            <input className={inputCls} type="text" autoComplete="off" spellCheck={false}
+              placeholder="admin" value={remoteUsername} onChange={(e) => setRemoteUsername(e.target.value)} />
+
+            <label className={labelCls}>Password</label>
+            <input className={inputCls} type="password" autoComplete="new-password" spellCheck={false}
+              placeholder="required to enable" value={remotePassword} onChange={(e) => setRemotePassword(e.target.value)} />
+            <div className="mt-1.5 text-[11.5px] leading-snug text-faint">
+              {remoteEnabled && !remotePassword
+                ? "Set a password — the server won't start without one."
+                : (remoteEnabled
+                  ? `Reach it at https://<this-computer>:${remotePort} from a browser on the same network.`
+                  : "Turn this on to reach your threads from another device.")}
+            </div>
+          </>
+        )}
 
         <div className="mt-5 mb-1 border-t border-border-strong pt-4 text-[13px] font-semibold tracking-tight text-ink">
           Privacy

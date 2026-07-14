@@ -145,7 +145,7 @@ export function Assistant({ m }: { m: AssistantMsg }) {
   const lastIsText = segments.length > 0 && segments[segments.length - 1].kind === "text";
 
   return (
-    <div className="mx-auto mb-7 max-w-[920px] px-8" onClick={onFigClick}>
+    <div className="chat-message-row mx-auto mb-7 max-w-[920px] px-8" onClick={onFigClick}>
       {/* pipeline trace (embed / search / collect / model) */}
       {(m.trace.length > 0 || (!m.done && !hasBody)) && (
         <div className="trace">

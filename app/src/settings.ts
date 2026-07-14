@@ -29,6 +29,13 @@ export interface Settings {
   // Anonymous usage analytics (Aptabase). Opt-out: defaults to true (enabled),
   // but never sends document content, filenames, questions, answers, or keys.
   analyticsEnabled: boolean;
+  // Remote web access: an HTTPS server hosted by this app that serves the same
+  // UI to a browser (desktop or mobile), gated by HTTP Basic Auth. The password
+  // is a secret (encrypted at rest); the rest are plaintext.
+  remoteEnabled: boolean;
+  remotePort: number;
+  remoteUsername: string;
+  remotePassword: string;
 }
 
 export interface LocalModelSettings {
@@ -84,6 +91,10 @@ export function readSettings(): Settings {
       bedrockRegion: typeof obj.bedrockRegion === "string" ? obj.bedrockRegion : "",
       // default ON; only an explicit `false` opts out
       analyticsEnabled: obj.analyticsEnabled !== false,
+      remoteEnabled: !!obj.remoteEnabled,
+      remotePort: Number.isFinite(obj.remotePort) ? obj.remotePort : 8443,
+      remoteUsername: typeof obj.remoteUsername === "string" ? obj.remoteUsername : "admin",
+      remotePassword: dec(obj.remotePassword),
     };
   } catch {
     return {
@@ -91,6 +102,7 @@ export function readSettings(): Settings {
       localBaseUrl: "", localApiKey: "", localModel: "", localModels: [],
       bedrockApiKey: "", bedrockRegion: "",
       analyticsEnabled: true,
+      remoteEnabled: false, remotePort: 8443, remoteUsername: "admin", remotePassword: "",
     };
   }
 }
@@ -117,6 +129,10 @@ export function writeSettings(s: Settings): void {
     bedrockApiKey: encv(s.bedrockApiKey || ""),
     bedrockRegion: s.bedrockRegion || "",
     analyticsEnabled: s.analyticsEnabled !== false,
+    remoteEnabled: !!s.remoteEnabled,
+    remotePort: Number.isFinite(s.remotePort) ? s.remotePort : 8443,
+    remoteUsername: s.remoteUsername || "admin",
+    remotePassword: encv(s.remotePassword || ""),
   };
   fs.writeFileSync(settingsPath(), JSON.stringify(obj, null, 2), { mode: 0o600 });
 }

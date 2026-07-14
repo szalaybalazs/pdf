@@ -8,7 +8,7 @@ import { Settings } from "./components/Settings";
 import { Viewer } from "./components/Viewer";
 import { APP_NAME } from "../../src/branding";
 import { OCR_LANGUAGES, DEFAULT_OCR_LANGUAGE } from "../../src/languages";
-import { IS_MAC } from "./platform";
+import { IS_MAC, IS_REMOTE } from "./platform";
 
 function HeaderSpinner() {
   return (
@@ -39,7 +39,7 @@ function SidebarToggleIcon() {
   );
 }
 
-function AppHeader({ sidebarOpen, onToggleSidebar, environmentOpen, onToggleEnvironment }: { sidebarOpen: boolean; onToggleSidebar: () => void; environmentOpen: boolean; onToggleEnvironment: () => void }) {
+function AppHeader({ sidebarOpen, sidebarDocked, onToggleSidebar, environmentOpen, onToggleEnvironment }: { sidebarOpen: boolean; sidebarDocked: boolean; onToggleSidebar: () => void; environmentOpen: boolean; onToggleEnvironment: () => void }) {
   const thread = activeThread();
   const working = !store.ready || !!store.ingest.text || !!thread?.busy;
   const title = thread?.title || "New chat";
@@ -52,7 +52,7 @@ function AppHeader({ sidebarOpen, onToggleSidebar, environmentOpen, onToggleEnvi
 
   return (
     <header className="app-drag window-header flex h-[46px] shrink-0 items-center">
-      <div className={`flex h-full items-center gap-2 px-3 ${IS_MAC ? "pl-[86px]" : ""} ${sidebarOpen ? "sidebar-chrome w-[300px] min-w-[300px]" : "main-chrome"}`}>
+      <div className={`flex h-full items-center gap-2 px-3 ${IS_MAC ? "pl-[86px]" : ""} ${sidebarDocked ? "sidebar-chrome w-[300px] min-w-[300px]" : "main-chrome"}`}>
         <button
           className="app-no-drag relative z-10 flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-lg text-faint transition hover:bg-surface-2 hover:text-ink"
           title={`${sidebarOpen ? "Hide" : "Show"} sidebar (${IS_MAC ? "⌘" : "Ctrl+"}B)`}
@@ -62,7 +62,7 @@ function AppHeader({ sidebarOpen, onToggleSidebar, environmentOpen, onToggleEnvi
         >
           <SidebarToggleIcon />
         </button>
-        {sidebarOpen && <span className="relative z-10 text-[12.5px] font-semibold text-ink/90">{APP_NAME}</span>}
+        {sidebarDocked && <span className="relative z-10 text-[12.5px] font-semibold text-ink/90">{APP_NAME}</span>}
       </div>
       <div className="main-chrome flex h-full min-w-0 flex-1 items-center gap-2 px-7">
         <div className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-[12.5px] font-medium text-faint/80">
@@ -90,6 +90,24 @@ function AppHeader({ sidebarOpen, onToggleSidebar, environmentOpen, onToggleEnvi
       </div>
     </header>
   );
+}
+
+function isMobileViewport(): boolean {
+  return typeof window !== "undefined" && window.matchMedia("(max-width: 760px)").matches;
+}
+
+function useMobileViewport(): boolean {
+  const [mobile, setMobile] = useState(isMobileViewport);
+
+  useEffect(() => {
+    const query = window.matchMedia("(max-width: 760px)");
+    const update = () => setMobile(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+
+  return mobile;
 }
 
 function LibraryDialog({ onClose }: { onClose: () => void }) {
@@ -388,7 +406,10 @@ function ConfirmDialog({ title, message, confirmLabel, danger, onConfirm, onClos
 export function App() {
   useStore();   // re-render on any store change
   const [environmentOpen, setEnvironmentOpen] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(() => !IS_REMOTE || !isMobileViewport());
+  const viewportMobile = useMobileViewport();
+  const isMobile = IS_REMOTE && viewportMobile;
+  const sidebarDocked = sidebarOpen && !isMobile;
   const [creatingLibrary, setCreatingLibrary] = useState(false);
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
 
@@ -402,6 +423,7 @@ export function App() {
         e.preventDefault();
         setSidebarOpen((v) => !v);
       }
+      if (e.key === "Escape" && sidebarOpen && isMobile) setSidebarOpen(false);
       if (e.key === "Escape" && store.settingsOpen) closeSettings();
       if (e.key === "Escape" && store.librarySettings !== null) closeLibrarySettings();
     };
@@ -451,18 +473,27 @@ export function App() {
       window.removeEventListener("pdf-qa-library-settings", onLibrarySettings);
       window.removeEventListener("pdf-qa-delete-library", onDeleteLibrary);
     };
-  }, []);
+  }, [isMobile, sidebarOpen]);
 
   return (
-    <div className="app-shell flex h-screen flex-col overflow-hidden">
+    <div className={`app-shell flex h-screen flex-col overflow-hidden ${IS_REMOTE ? "web-view" : ""}`}>
       <AppHeader
         sidebarOpen={sidebarOpen}
+        sidebarDocked={sidebarDocked}
         onToggleSidebar={() => setSidebarOpen((v) => !v)}
         environmentOpen={environmentOpen}
         onToggleEnvironment={() => setEnvironmentOpen((v) => !v)}
       />
-      <div className="flex min-h-0 flex-1 overflow-hidden">
-        {sidebarOpen && <Sidebar />}
+      <div className="app-content flex min-h-0 flex-1 overflow-hidden">
+        {sidebarDocked && <Sidebar />}
+        {sidebarOpen && isMobile && (
+          <div
+            className="sidebar-sheet-layer modal-scrim fixed inset-0 z-40"
+            onClick={(e) => { if (e.target === e.currentTarget) setSidebarOpen(false); }}
+          >
+            <Sidebar sheet onRequestClose={() => setSidebarOpen(false)} />
+          </div>
+        )}
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <Chat />
           {environmentOpen && <Inspector onClose={() => setEnvironmentOpen(false)} />}
